@@ -17,20 +17,21 @@ Pipeline:
 Author: DG_Brain Pipeline
 Target: Python 3.11+ on Windows 11 (PowerShell 7)
 
-Install:
-    py -3.11 -m pip install --upgrade pip
-    py -3.11 -m pip install mediapipe==0.10.18 opencv-python==4.10.0.84 numpy==1.26.4
+Install (Python 3.10 or 3.11 both supported by MediaPipe 0.10.x):
+    python -m pip install --upgrade pip
+    python -m pip install mediapipe==0.10.18 opencv-python==4.10.0.84 numpy==1.26.4 matplotlib==3.9.2
 
 Run:
-    py -3.11 C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\face_proportion_analyzer.py ^
-        --image C:\\AI\\apps\\DG_Brain\\assets\\portrait.jpg ^
-        --out C:\\AI\\apps\\DG_Brain\\data\\face_proportions.json
+    python C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\face_proportion_analyzer.py ^
+        --image C:\\AI\\apps\\DG_Brain\\assets\\refs\\winona_ref.png ^
+        --out   C:\\AI\\apps\\DG_Brain\\data\\face_proportions.json
 """
 from __future__ import annotations
 
 import argparse
 import json
 import logging
+import math
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -106,19 +107,21 @@ LOOMIS_BASELINE: Dict[str, float] = {
 # positive MH modifier value in [-1.0, 1.0]; clamp + scale via SENSITIVITY.
 # -----------------------------------------------------------------------------
 MODIFIER_MAP: Dict[str, str] = {
-    "face_width_per_eye":        "macrodetails/universal-face-width",
-    "nose_width_per_eye":        "nose/nose-trans-scale-decr|incr",
-    "mouth_width_per_eye":       "mouth/mouth-trans-scale-decr|incr",
+    # Convention: "<group>/<target>-<min_kw>|<max_kw>" -- Step C resolves to
+    # an actual .target file by picking <target>-<min_kw>.target when value
+    # is negative or <target>-<max_kw>.target when positive.
+    "face_width_per_eye":        "head/head-scale-horiz-decr|incr",
     "face_height_per_eye":       "head/head-scale-vert-decr|incr",
-    "hairline_to_brow_per_eye":  "forehead/forehead-trans-down|up",
-    "brow_to_nose_per_eye":      "nose/nose-trans-up|down",
-    "nose_to_chin_per_eye":      "chin/chin-trans-down|up",
-    "eye_to_mouth_per_eye":      "mouth/mouth-trans-up|down",
-    "intereye_per_eye":          "eyes/l-eye-trans-out|in",
-    "ipd_per_eye":               "eyes/r-eye-trans-out|in",
+    "nose_width_per_eye":        "nose/nose-scale-horiz-decr|incr",
+    "mouth_width_per_eye":       "mouth/mouth-scale-horiz-decr|incr",
+    "hairline_to_brow_per_eye":  "forehead/forehead-scale-vert-decr|incr",
+    "brow_to_nose_per_eye":      "nose/nose-scale-vert-decr|incr",
+    "eye_to_mouth_per_eye":      "mouth/mouth-trans-down|up",
+    "intereye_per_eye":          "eyes/l-eye-trans-in|out",
+    "ipd_per_eye":               "eyes/r-eye-trans-in|out",
 }
 
-SENSITIVITY = 0.8  # global scaler when converting ratio delta -> MH value
+SENSITIVITY = 1.5  # global scaler when converting ratio delta -> MH value
 MH_VALUE_CLAMP = (-1.0, 1.0)
 
 
@@ -132,14 +135,69 @@ class FaceLandmarks:
     points: Dict[str, np.ndarray] = field(default_factory=dict)
     image_size: Tuple[int, int] = (0, 0)
     roll_rad: float = 0.0
+    bbox_px: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    head_pose_deg: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # yaw, pitch, roll
 
     def dist(self, a: str, b: str) -> float:
         return float(np.linalg.norm(self.points[a] - self.points[b]))
 
 
+# Canonical 3D model points (approximate, generic adult face, mm scale).
+# Order matches CANONICAL_LM_IDS below. Coordinate system MUST match the 2D
+# input we feed solvePnP -- which uses image pixel coords (x right, y DOWN,
+# z into the screen). So chin sits at +y, eyes at -y. Getting this wrong is
+# the classic source of "roll = 180 degrees" bogus pose estimates.
+CANONICAL_FACE_3D = np.array([
+    [  0.0,   0.0,   0.0],     # nose tip -- closest to camera in z
+    [  0.0,  63.6,  12.5],     # chin (lm 152) -- y down, z +ve (further from camera)
+    [-43.3, -32.7,  26.0],     # left eye outer (lm 33) -- above nose, behind in z
+    [ 43.3, -32.7,  26.0],     # right eye outer (lm 263)
+    [-28.9,  28.9,  24.1],     # left mouth corner (lm 61) -- below nose, behind
+    [ 28.9,  28.9,  24.1],     # right mouth corner (lm 291)
+], dtype=np.float64)
+CANONICAL_LM_IDS = [1, 152, 33, 263, 61, 291]
+
+
+def estimate_head_pose(
+    raw_lms: List, image_w: int, image_h: int,
+) -> Tuple[float, float, float]:
+    """Solve PnP -> (yaw, pitch, roll) degrees of the head relative to camera."""
+    pts_2d = np.array(
+        [[raw_lms[i].x * image_w, raw_lms[i].y * image_h] for i in CANONICAL_LM_IDS],
+        dtype=np.float64,
+    )
+    focal = float(image_w)
+    cx, cy = image_w / 2.0, image_h / 2.0
+    camera_matrix = np.array(
+        [[focal, 0.0, cx], [0.0, focal, cy], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    dist = np.zeros((4, 1), dtype=np.float64)
+    ok, rvec, _ = cv2.solvePnP(
+        CANONICAL_FACE_3D, pts_2d, camera_matrix, dist,
+        flags=cv2.SOLVEPNP_ITERATIVE,
+    )
+    if not ok:
+        return 0.0, 0.0, 0.0
+    rmat, _ = cv2.Rodrigues(rvec)
+    sy = math.hypot(rmat[0, 0], rmat[1, 0])
+    if sy > 1e-6:
+        pitch = math.degrees(math.atan2(-rmat[2, 0], sy))
+        yaw = math.degrees(math.atan2(rmat[1, 0], rmat[0, 0]))
+        roll = math.degrees(math.atan2(rmat[2, 1], rmat[2, 2]))
+    else:
+        pitch = math.degrees(math.atan2(-rmat[2, 0], sy))
+        yaw = 0.0
+        roll = math.degrees(math.atan2(-rmat[1, 2], rmat[1, 1]))
+    return yaw, pitch, roll
+
+
 @dataclass
 class ProportionReport:
     image: str
+    image_size: List[int]
+    face_bbox: List[float]
+    head_pose_deg: List[float]  # [yaw, pitch, roll]
     subject_ratios: Dict[str, float]
     baseline_ratios: Dict[str, float]
     delta_ratios: Dict[str, float]
@@ -183,6 +241,16 @@ def extract_landmarks(image_path: Path) -> FaceLandmarks:
         lm = raw[idx]
         pts_px[name] = np.array([lm.x * w, lm.y * h], dtype=np.float64)
 
+    # Full-landmark bounding box in original pixel coords (used by the renderer
+    # to crop the source photo to just the analyzed face).
+    all_xy = np.array([(lm.x * w, lm.y * h) for lm in raw], dtype=np.float64)
+    bbox = (
+        float(all_xy[:, 0].min()),
+        float(all_xy[:, 1].min()),
+        float(all_xy[:, 0].max()),
+        float(all_xy[:, 1].max()),
+    )
+
     # Roll-align: rotate so eye line is horizontal.
     el = pts_px["eye_l_outer"]
     er = pts_px["eye_r_outer"]
@@ -193,7 +261,19 @@ def extract_landmarks(image_path: Path) -> FaceLandmarks:
     centroid = (el + er) / 2.0
     aligned = {k: (rot @ (p - centroid)) for k, p in pts_px.items()}
 
-    return FaceLandmarks(points=aligned, image_size=(w, h), roll_rad=roll)
+    pose_deg = estimate_head_pose(raw, w, h)
+    log.info(
+        "Estimated head pose (deg): yaw=%.2f pitch=%.2f roll=%.2f",
+        *pose_deg,
+    )
+
+    return FaceLandmarks(
+        points=aligned,
+        image_size=(w, h),
+        roll_rad=roll,
+        bbox_px=bbox,
+        head_pose_deg=pose_deg,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -290,6 +370,9 @@ def analyze(image_path: Path, out_path: Path) -> ProportionReport:
 
     report = ProportionReport(
         image=str(image_path),
+        image_size=[face.image_size[0], face.image_size[1]],
+        face_bbox=[round(b, 2) for b in face.bbox_px],
+        head_pose_deg=[round(d, 3) for d in face.head_pose_deg],
         subject_ratios={k: round(v, 4) for k, v in subject_ratios.items()},
         baseline_ratios=LOOMIS_BASELINE,
         delta_ratios=delta_ratios,
