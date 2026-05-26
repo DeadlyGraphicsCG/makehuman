@@ -75,9 +75,69 @@ def load_canonical_triangles(obj_path: Path) -> np.ndarray:
 
 
 # -----------------------------------------------------------------------------
+# Midpoint subdivision (densification)
+# -----------------------------------------------------------------------------
+def subdivide_once(
+    verts: np.ndarray, uvs: np.ndarray, tris: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One pass of midpoint subdivision -- every triangle becomes 4.
+
+    Vertex positions interpolate linearly between the parent triangle's
+    corners; same for UVs (which is the right thing for projective texture).
+    Edges shared between triangles get a single shared midpoint so the mesh
+    stays watertight.
+    """
+    new_verts: List[List[float]] = [list(v) for v in verts]
+    new_uvs: List[List[float]] = [list(u) for u in uvs] if len(uvs) else []
+    midpoint_cache: dict[tuple[int, int], int] = {}
+
+    def get_midpoint(i: int, j: int) -> int:
+        key = (min(i, j), max(i, j))
+        cached = midpoint_cache.get(key)
+        if cached is not None:
+            return cached
+        mid_v = ((verts[i] + verts[j]) / 2.0).tolist()
+        new_verts.append(mid_v)
+        if len(uvs):
+            new_uvs.append(((uvs[i] + uvs[j]) / 2.0).tolist())
+        idx = len(new_verts) - 1
+        midpoint_cache[key] = idx
+        return idx
+
+    new_tris: List[List[int]] = []
+    for tri in tris:
+        v0, v1, v2 = int(tri[0]), int(tri[1]), int(tri[2])
+        m01 = get_midpoint(v0, v1)
+        m12 = get_midpoint(v1, v2)
+        m20 = get_midpoint(v2, v0)
+        new_tris.append([v0, m01, m20])
+        new_tris.append([m01, v1, m12])
+        new_tris.append([m20, m12, v2])
+        new_tris.append([m01, m12, m20])
+
+    return (
+        np.asarray(new_verts, dtype=np.float64),
+        np.asarray(new_uvs, dtype=np.float64) if new_uvs else np.empty((0, 2)),
+        np.asarray(new_tris, dtype=np.int64),
+    )
+
+
+def subdivide_n(
+    verts: np.ndarray, uvs: np.ndarray, tris: np.ndarray, n: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    for level in range(n):
+        verts, uvs, tris = subdivide_once(verts, uvs, tris)
+        log.info(
+            "Subdivision pass %d/%d -> %d verts, %d triangles",
+            level + 1, n, len(verts), len(tris),
+        )
+    return verts, uvs, tris
+
+
+# -----------------------------------------------------------------------------
 # Reconstruction
 # -----------------------------------------------------------------------------
-def reconstruct(image_path: Path, out_obj: Path) -> Path:
+def reconstruct(image_path: Path, out_obj: Path, subdivisions: int = 0) -> Path:
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
     if not CANONICAL_OBJ.exists():
@@ -128,6 +188,9 @@ def reconstruct(image_path: Path, out_obj: Path) -> Path:
     # face references will be of the form "f v/v v/v v/v".
     uvs = np.array([[lm.x, 1.0 - lm.y] for lm in lms], dtype=np.float64)
 
+    if subdivisions > 0:
+        verts, uvs, tris = subdivide_n(verts, uvs, tris, subdivisions)
+
     out_obj.parent.mkdir(parents=True, exist_ok=True)
     with out_obj.open("w", encoding="utf-8") as fh:
         fh.write("# Face mesh reconstructed via MediaPipe FaceMesh\n")
@@ -167,13 +230,24 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path(r"C:\AI\apps\DG_Brain\data\subject_face_mesh.obj"),
     )
+    parser.add_argument(
+        "--subdivisions",
+        type=int,
+        default=0,
+        help=(
+            "Number of midpoint-subdivision passes. Each pass quadruples the "
+            "triangle count and reduces texture-sampling facets. 0 (default) "
+            "keeps the raw 478-vert canonical mesh; 2 -> ~7600 verts, 14336 "
+            "triangles -- visibly smoother texture and still <1s to render."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        reconstruct(args.image, args.out)
+        reconstruct(args.image, args.out, subdivisions=args.subdivisions)
     except FileNotFoundError as exc:
         log.error("Missing input: %s", exc)
         return 2
