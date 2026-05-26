@@ -23,6 +23,9 @@ __pycache__/
 #####################################
 *.obj
 *.png
+
+# DG face pipeline vendored 3rd-party assets (Apache-2.0 from google/mediapipe)
+!dg_face_pipeline/canonical_face_model.obj
 *.thumb
 *.mhclo
 *.mhmat
