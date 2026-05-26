@@ -53,8 +53,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("run_full_pipeline")
 
-DATA_ROOT = Path(r"C:\AI\apps\DG_Brain\data")
-RENDERS_ROOT = DATA_ROOT / "renders"
+PIPELINE_DIR = SCRIPT_DIR  # alias for readability
+EXAMPLES_DIR = PIPELINE_DIR / "examples"
+OUTPUTS_DIR = PIPELINE_DIR / "outputs"
+DATA_ROOT = OUTPUTS_DIR / "data"
+RENDERS_ROOT = OUTPUTS_DIR / "renders"
+MH_ROOT = PIPELINE_DIR.parent / "makehuman"
 
 
 # -----------------------------------------------------------------------------
@@ -145,7 +149,7 @@ def run(
     log.info("STEP 4/5 : render MH 4-panel comparison")
     log.info("=" * 72)
     render_mh.render_compare(
-        baseline_obj=Path(r"C:\AI\apps\Makehuman\makehuman\data\3dobjs\base.obj"),
+        baseline_obj=MH_ROOT / "data" / "3dobjs" / "base.obj",
         morphed_obj=morphed_obj,
         out_png=mh_render_png,
         photo_path=image,

@@ -47,10 +47,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("step_c_apply_modifiers")
 
-MH_ROOT = Path(r"C:\AI\apps\Makehuman\makehuman")
+PIPELINE_DIR = Path(__file__).resolve().parent
+MH_ROOT = PIPELINE_DIR.parent / "makehuman"
 BASE_OBJ_DEFAULT = MH_ROOT / "data" / "3dobjs" / "base.obj"
 TARGETS_ROOT = MH_ROOT / "data" / "targets"
 MODIFIERS_JSON = MH_ROOT / "data" / "modifiers" / "modeling_modifiers.json"
+OUTPUTS_DIR = PIPELINE_DIR / "outputs"
 
 VERT_LINE_RE = re.compile(r"^v\s+")
 
@@ -242,13 +244,13 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--proportions",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\data\face_proportions.json"),
+        default=OUTPUTS_DIR / "data" / "face_proportions.json",
     )
     parser.add_argument("--base_obj", type=Path, default=BASE_OBJ_DEFAULT)
     parser.add_argument(
         "--out_obj",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\data\morphed.obj"),
+        default=OUTPUTS_DIR / "data" / "morphed.obj",
     )
     parser.add_argument(
         "--amplify",

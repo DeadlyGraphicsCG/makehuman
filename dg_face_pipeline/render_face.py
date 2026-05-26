@@ -45,6 +45,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("render_face")
 
+PIPELINE_DIR = Path(__file__).resolve().parent
+MH_ROOT = PIPELINE_DIR.parent / "makehuman"
+OUTPUTS_DIR = PIPELINE_DIR / "outputs"
+
 VERT_RE = re.compile(r"^v\s+")
 FACE_RE = re.compile(r"^f\s+")
 GROUP_RE = re.compile(r"^g\s+(\S+)")
@@ -430,12 +434,12 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--baseline",
         type=Path,
-        default=Path(r"C:\AI\apps\Makehuman\makehuman\data\3dobjs\base.obj"),
+        default=MH_ROOT / "data" / "3dobjs" / "base.obj",
     )
     parser.add_argument(
         "--morphed",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\data\morphed.obj"),
+        default=OUTPUTS_DIR / "data" / "morphed.obj",
     )
     parser.add_argument(
         "--photo",
@@ -446,13 +450,13 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--proportions",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\data\face_proportions.json"),
+        default=OUTPUTS_DIR / "data" / "face_proportions.json",
         help="Analyzer JSON; used for face_bbox to crop the photo panel.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\data\renders\mesh_compare.png"),
+        default=OUTPUTS_DIR / "renders" / "mesh_compare.png",
     )
     return parser.parse_args(argv)
 

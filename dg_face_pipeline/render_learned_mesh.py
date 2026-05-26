@@ -42,6 +42,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("render_learned_mesh")
 
+PIPELINE_DIR = Path(__file__).resolve().parent
+EXAMPLES_DIR = PIPELINE_DIR / "examples"
+OUTPUTS_DIR = PIPELINE_DIR / "outputs"
+
 VERT_RE = re.compile(r"^v\s+")
 FACE_RE = re.compile(r"^f\s+")
 
@@ -263,13 +267,13 @@ def render(
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--photo", type=Path,
-                   default=Path(r"C:\AI\apps\DG_Brain\assets\refs\winona_ref.png"))
+                   default=EXAMPLES_DIR / "winona_ref.png")
     p.add_argument("--mesh", type=Path,
-                   default=Path(r"C:\AI\apps\DG_Brain\data\subject_face_mesh.obj"))
+                   default=OUTPUTS_DIR / "data" / "subject_face_mesh.obj")
     p.add_argument("--proportions", type=Path,
-                   default=Path(r"C:\AI\apps\DG_Brain\data\face_proportions.json"))
+                   default=OUTPUTS_DIR / "data" / "face_proportions.json")
     p.add_argument("--out", type=Path,
-                   default=Path(r"C:\AI\apps\DG_Brain\data\renders\learned_mesh.png"))
+                   default=OUTPUTS_DIR / "renders" / "learned_mesh.png")
     args = p.parse_args(argv)
     try:
         render(args.photo, args.mesh, args.out, args.proportions)

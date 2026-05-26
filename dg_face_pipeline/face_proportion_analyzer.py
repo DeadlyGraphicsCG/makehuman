@@ -47,6 +47,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("face_proportion_analyzer")
 
+# Pipeline-relative defaults so the script is portable (no hardcoded DG_Brain
+# absolute paths). All inputs default under examples/ and outputs under
+# outputs/data/ inside the pipeline directory.
+PIPELINE_DIR = Path(__file__).resolve().parent
+EXAMPLES_DIR = PIPELINE_DIR / "examples"
+OUTPUTS_DIR = PIPELINE_DIR / "outputs"
+
 # -----------------------------------------------------------------------------
 # MediaPipe FaceMesh landmark indices (well-known constants from the 468 set;
 # +iris when refine_landmarks=True adds 468..477 for the two iris rings).
@@ -403,13 +410,13 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--image",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\assets\portrait.jpg"),
+        default=EXAMPLES_DIR / "winona_ref.png",
         help="Path to source portrait image.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\data\face_proportions.json"),
+        default=OUTPUTS_DIR / "data" / "face_proportions.json",
         help="Path to write JSON report.",
     )
     return parser.parse_args(argv)

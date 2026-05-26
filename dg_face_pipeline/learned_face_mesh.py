@@ -42,7 +42,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("learned_face_mesh")
 
-CANONICAL_OBJ = Path(__file__).parent / "canonical_face_model.obj"
+PIPELINE_DIR = Path(__file__).resolve().parent
+EXAMPLES_DIR = PIPELINE_DIR / "examples"
+OUTPUTS_DIR = PIPELINE_DIR / "outputs"
+CANONICAL_OBJ = PIPELINE_DIR / "canonical_face_model.obj"
 
 
 # -----------------------------------------------------------------------------
@@ -223,12 +226,12 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--image",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\assets\refs\winona_ref.png"),
+        default=EXAMPLES_DIR / "winona_ref.png",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(r"C:\AI\apps\DG_Brain\data\subject_face_mesh.obj"),
+        default=OUTPUTS_DIR / "data" / "subject_face_mesh.obj",
     )
     parser.add_argument(
         "--subdivisions",
