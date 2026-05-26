@@ -122,18 +122,31 @@ def reconstruct(image_path: Path, out_obj: Path) -> Path:
             f"{len(verts)} predicted from FaceMesh"
         )
 
+    # UV coordinates come for free: each landmark's normalized image (x, y) is
+    # its UV. We flip v so OBJ convention (origin bottom-left) lines up with
+    # MediaPipe convention (origin top-left). Vertex index == UV index, so the
+    # face references will be of the form "f v/v v/v v/v".
+    uvs = np.array([[lm.x, 1.0 - lm.y] for lm in lms], dtype=np.float64)
+
     out_obj.parent.mkdir(parents=True, exist_ok=True)
     with out_obj.open("w", encoding="utf-8") as fh:
         fh.write("# Face mesh reconstructed via MediaPipe FaceMesh\n")
         fh.write(f"# Source image: {image_path}\n")
         fh.write(f"# Image size: {w} x {h}\n")
-        fh.write(f"# Verts: {len(verts)}  Triangles: {len(tris)}\n")
+        fh.write(f"# Verts: {len(verts)}  UVs: {len(uvs)}  Triangles: {len(tris)}\n")
         fh.write("g face_mesh\n")
         for v in verts:
             fh.write(f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n")
+        for uv in uvs:
+            fh.write(f"vt {uv[0]:.6f} {uv[1]:.6f}\n")
         for t in tris:
-            fh.write(f"f {t[0] + 1} {t[1] + 1} {t[2] + 1}\n")
-    log.info("Wrote face mesh OBJ: %s", out_obj)
+            # Vertex index == UV index for this mesh (1-indexed in OBJ).
+            fh.write(
+                f"f {t[0] + 1}/{t[0] + 1} "
+                f"{t[1] + 1}/{t[1] + 1} "
+                f"{t[2] + 1}/{t[2] + 1}\n"
+            )
+    log.info("Wrote face mesh OBJ: %s (verts+UVs)", out_obj)
     return out_obj
 
 

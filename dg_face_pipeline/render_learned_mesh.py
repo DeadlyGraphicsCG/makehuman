@@ -50,26 +50,65 @@ LIGHT_DIR = LIGHT_DIR / np.linalg.norm(LIGHT_DIR)
 AMBIENT = 0.30
 
 
-def load_obj_simple(obj_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+VT_RE = re.compile(r"^vt\s+")
+
+
+def load_obj_with_uvs(
+    obj_path: Path,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return (verts Nx3, uvs Mx2, tri_v Tx3, tri_uv Tx3).
+
+    tri_v[i] = vertex indices for triangle i (0-indexed).
+    tri_uv[i] = UV indices for triangle i (0-indexed). When the OBJ has no
+    vt lines, tri_uv is identical to tri_v and `uvs` is empty -- callers
+    should check `uvs.size > 0` before attempting texture sampling.
+    """
     verts: List[List[float]] = []
-    tris: List[List[int]] = []
+    uvs: List[List[float]] = []
+    tri_v: List[List[int]] = []
+    tri_uv: List[List[int]] = []
     with obj_path.open("r", encoding="utf-8") as fh:
         for line in fh:
             if VERT_RE.match(line):
                 parts = line.split()
                 verts.append([float(parts[1]), float(parts[2]), float(parts[3])])
+            elif VT_RE.match(line):
+                parts = line.split()
+                uvs.append([float(parts[1]), float(parts[2])])
             elif FACE_RE.match(line):
                 parts = line.split()[1:]
-                idx = [int(p.split("/")[0]) - 1 for p in parts]
-                if len(idx) == 3:
-                    tris.append(idx)
-                elif len(idx) == 4:
-                    tris.append([idx[0], idx[1], idx[2]])
-                    tris.append([idx[0], idx[2], idx[3]])
+                v_idx: List[int] = []
+                vt_idx: List[int] = []
+                for p in parts:
+                    bits = p.split("/")
+                    v_idx.append(int(bits[0]) - 1)
+                    if len(bits) >= 2 and bits[1]:
+                        vt_idx.append(int(bits[1]) - 1)
+                    else:
+                        vt_idx.append(int(bits[0]) - 1)
+                if len(v_idx) == 3:
+                    tri_v.append(v_idx)
+                    tri_uv.append(vt_idx)
+                elif len(v_idx) == 4:
+                    tri_v.append([v_idx[0], v_idx[1], v_idx[2]])
+                    tri_v.append([v_idx[0], v_idx[2], v_idx[3]])
+                    tri_uv.append([vt_idx[0], vt_idx[1], vt_idx[2]])
+                    tri_uv.append([vt_idx[0], vt_idx[2], vt_idx[3]])
     v = np.asarray(verts, dtype=np.float64)
-    t = np.asarray(tris, dtype=np.int64)
-    log.info("Loaded %s: %d verts, %d triangles", obj_path.name, len(v), len(t))
-    return v, t
+    uv = np.asarray(uvs, dtype=np.float64) if uvs else np.empty((0, 2))
+    tv = np.asarray(tri_v, dtype=np.int64)
+    tu = np.asarray(tri_uv, dtype=np.int64)
+    log.info(
+        "Loaded %s: %d verts, %d UVs, %d triangles",
+        obj_path.name, len(v), len(uv), len(tv),
+    )
+    return v, uv, tv, tu
+
+
+def load_obj_simple(obj_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """Back-compat shim: discard UV data, return only verts + tri vertex indices."""
+    v, _uv, tv, _tu = load_obj_with_uvs(obj_path)
+    return v, tv
 
 
 def rotate_y(verts: np.ndarray, yaw_deg: float) -> np.ndarray:
@@ -80,6 +119,29 @@ def rotate_y(verts: np.ndarray, yaw_deg: float) -> np.ndarray:
                   [0.0, 1.0, 0.0],
                   [-math.sin(y), 0.0, math.cos(y)]])
     return (v @ R.T) + centroid
+
+
+def sample_photo_per_triangle(
+    photo_rgb: np.ndarray, uvs_per_tri: np.ndarray,
+) -> np.ndarray:
+    """Sample the source image at each triangle's centroid UV.
+
+    photo_rgb : (H, W, 3 or 4) image, 0-1 float OR 0-255 uint8
+    uvs_per_tri : (T, 3, 2) UV coords (u right, v up, OBJ convention)
+    Returns : (T, 3) RGB in 0-1 float.
+    """
+    centroids = uvs_per_tri.mean(axis=1)  # (T, 2)
+    h, w = photo_rgb.shape[:2]
+    us = np.clip((centroids[:, 0] * (w - 1)).astype(int), 0, w - 1)
+    # OBJ convention has v growing up; image arrays have y growing down -> flip
+    vs = np.clip(((1.0 - centroids[:, 1]) * (h - 1)).astype(int), 0, h - 1)
+    rgb = photo_rgb[vs, us]
+    if rgb.shape[-1] == 4:
+        rgb = rgb[..., :3]
+    rgb = rgb.astype(np.float64)
+    if rgb.max() > 1.5:
+        rgb = rgb / 255.0
+    return rgb
 
 
 def shade(verts: np.ndarray, tris: np.ndarray) -> np.ndarray:
@@ -98,10 +160,26 @@ def draw_mesh(
     tris: np.ndarray,
     title: str,
     skin: Tuple[float, float, float] = (0.86, 0.71, 0.62),
+    uvs: np.ndarray | None = None,
+    tri_uv: np.ndarray | None = None,
+    photo_rgb: np.ndarray | None = None,
+    shade_strength: float = 0.55,
 ) -> None:
     intensity = shade(verts, tris)
     polys = verts[tris][:, :, [0, 1]]
-    colors = np.tile(skin, (len(tris), 1)) * intensity[:, None]
+
+    if (uvs is not None and tri_uv is not None and photo_rgb is not None
+            and len(uvs) > 0):
+        uvs_per_tri = uvs[tri_uv]  # (T, 3, 2)
+        base = sample_photo_per_triangle(photo_rgb, uvs_per_tri)
+        # Dampen shading so the photo dominates; pure Lambert (intensity in
+        # [AMBIENT, 1]) would over-darken textured surfaces because the photo
+        # already contains baked-in lighting from the source.
+        shade_factor = 1.0 - shade_strength + shade_strength * intensity
+        colors = base * shade_factor[:, None]
+    else:
+        colors = np.tile(skin, (len(tris), 1)) * intensity[:, None]
+
     order = np.argsort(verts[tris][:, :, 2].mean(axis=1))
     pc = PolyCollection(polys[order], facecolors=colors[order],
                         edgecolors="none", linewidths=0)
@@ -146,14 +224,32 @@ def draw_photo(
 def render(
     photo: Path, mesh: Path, out_png: Path, proportions: Path | None,
 ) -> Path:
-    verts, tris = load_obj_simple(mesh)
+    verts, uvs, tri_v, tri_uv = load_obj_with_uvs(mesh)
+    photo_rgb: np.ndarray | None = None
+    if photo and photo.exists():
+        photo_rgb = mpimg.imread(str(photo))
+        log.info(
+            "Loaded photo for texture projection: %s (%dx%d)",
+            photo.name, photo_rgb.shape[1], photo_rgb.shape[0],
+        )
+
+    has_texture = (photo_rgb is not None and len(uvs) > 0)
+    suffix = " (photo-textured)" if has_texture else " (flat-shaded)"
+
     fig, axes = plt.subplots(1, 3, figsize=(15, 6), facecolor="#15151a")
     draw_photo(axes[0], photo, proportions)
-    draw_mesh(axes[1], verts, tris, "Reconstructed mesh -- frontal")
-    draw_mesh(axes[2], rotate_y(verts, 25.0), tris,
-              "Reconstructed mesh -- 3/4 view (yaw +25 deg)")
+    draw_mesh(
+        axes[1], verts, tri_v, "Reconstructed mesh -- frontal" + suffix,
+        uvs=uvs, tri_uv=tri_uv, photo_rgb=photo_rgb,
+    )
+    draw_mesh(
+        axes[2], rotate_y(verts, 25.0), tri_v,
+        "Reconstructed mesh -- 3/4 view (yaw +25 deg)" + suffix,
+        uvs=uvs, tri_uv=tri_uv, photo_rgb=photo_rgb,
+    )
     fig.suptitle(
-        "Photo -> learned face mesh (MediaPipe FaceMesh, 478 verts)",
+        "Photo -> learned face mesh (MediaPipe FaceMesh, 478 verts)"
+        + (" with projective texture" if has_texture else ""),
         color="white", fontsize=13, y=0.97,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.93))
