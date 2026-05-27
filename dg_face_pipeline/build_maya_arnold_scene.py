@@ -234,7 +234,19 @@ def purge_generated_shader_clutter(cmds, subject: str) -> None:
         log.info("Removed %d stale/generated shader nodes", removed)
 
 
-def create_fallback_camera_and_lights(cmds) -> None:
+def delete_generated_lights(cmds) -> None:
+    candidates: list[str] = []
+    for pattern in (
+        "key_area_light*",
+        "fill_area_light*",
+        "dg_physical_sky*",
+        "dg_skydome_light*",
+    ):
+        candidates.extend(cmds.ls(pattern) or [])
+    delete_nodes(cmds, candidates)
+
+
+def create_camera_and_lighting(cmds, lighting: str) -> None:
     cameras = [c for c in (cmds.ls(type="camera") or []) if not c.startswith(("persp", "top", "front", "side"))]
     if not cameras:
         cam_transform, cam_shape = cmds.camera(name="render_cam")
@@ -243,7 +255,21 @@ def create_fallback_camera_and_lights(cmds) -> None:
         cmds.setAttr(f"{cam_shape}.nearClipPlane", 0.1)
         cmds.setAttr(f"{cam_shape}.farClipPlane", 1000)
         cmds.setAttr(f"{cam_shape}.renderable", True)
-    if not cmds.ls(type="aiAreaLight"):
+    delete_generated_lights(cmds)
+    if lighting == "none":
+        return
+    if lighting == "physical_sky":
+        sky = cmds.shadingNode("aiPhysicalSky", asUtility=True, name="dg_physical_sky")
+        set_if_exists(cmds, sky, "intensity", 0.85)
+        set_if_exists(cmds, sky, "turbidity", 2.5)
+        set_if_exists(cmds, sky, "elevation", 48.0)
+        set_if_exists(cmds, sky, "azimuth", 135.0)
+        dome = cmds.createNode("transform", name="dg_skydome_light")
+        dome_shape = cmds.createNode("aiSkyDomeLight", name="dg_skydome_lightShape", parent=dome)
+        set_if_exists(cmds, dome_shape, "intensity", 1.0)
+        connect_if_possible(cmds, f"{sky}.outColor", f"{dome_shape}.color")
+        log.info("Created Arnold physical sky with skydome lighting")
+    elif lighting == "area":
         key = cmds.createNode("transform", name="key_area_light")
         key_shape = cmds.createNode("aiAreaLight", name="key_area_lightShape", parent=key)
         cmds.setAttr(f"{key}.translate", -45, 55, 80, type="double3")
@@ -256,6 +282,7 @@ def create_fallback_camera_and_lights(cmds) -> None:
         cmds.setAttr(f"{fill}.rotate", -25, 25, 0, type="double3")
         set_if_exists(cmds, fill_shape, "intensity", 130)
         set_if_exists(cmds, fill_shape, "aiSamples", 2)
+        log.info("Created fallback Arnold area-light rig")
 
 
 def camera_transforms(cmds) -> list[str]:
@@ -588,6 +615,7 @@ def build_scene(
     out: Path,
     template: Path | None,
     layout: str,
+    lighting: str,
     front_rotate_y: float,
     arnold_subdiv_type: str,
     arnold_subdiv_iterations: int,
@@ -600,7 +628,7 @@ def build_scene(
     template_center_y, template_x_spacing = capture_template_layout(cmds)
     if clear_meshes:
         clear_template_meshes(cmds)
-    create_fallback_camera_and_lights(cmds)
+    create_camera_and_lighting(cmds, lighting)
     purge_generated_shader_clutter(cmds, subject)
     try:
         cmds.setAttr("defaultRenderGlobals.ren", "arnold", type="string")
@@ -649,6 +677,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--template", type=Path)
     p.add_argument("--out", type=Path)
     p.add_argument("--layout", choices=["single", "three"], default="three")
+    p.add_argument(
+        "--lighting",
+        choices=["physical_sky", "area", "none"],
+        default="physical_sky",
+        help=(
+            "Generated lighting rig. physical_sky creates aiPhysicalSky plus "
+            "aiSkyDomeLight; area uses the legacy two-light setup."
+        ),
+    )
     p.add_argument("--front-rotate-y", type=float, default=-24.0)
     p.add_argument("--arnold-subdiv-type", choices=sorted(ARNOLD_SUBDIV_TYPES), default="catclark")
     p.add_argument("--arnold-subdiv-iterations", type=int, default=2)
@@ -690,6 +727,7 @@ def main(argv: list[str] | None = None) -> int:
             out,
             template if template and template.exists() else None,
             args.layout,
+            args.lighting,
             args.front_rotate_y,
             args.arnold_subdiv_type,
             args.arnold_subdiv_iterations,

@@ -21,12 +21,17 @@ created by the existing scripts in this order:
 9. Export a Maya-centimeter OBJ centered at origin.
 10. Build an Arnold Maya scene from the Maya-centimeter OBJ.
 11. Assign canonical albedo, roughness, and normal file nodes.
-12. Save clean `.ma` and `.mb` look-dev scenes.
+12. Build a physical-sky Arnold lighting rig.
+13. Save clean `.ma` and `.mb` look-dev scenes.
 
 The scene was also reopened with Maya Python to verify:
 
 - the center mesh transform is at `translate 0 0 0`;
 - the center mesh has `rotateY 0`;
+- the three-up scene has center, left, and right meshes at `0`, `-45`, and
+  `+45` degrees;
+- physical sky and skydome Arnold nodes are present;
+- no generated legacy area lights are present;
 - the shader file nodes resolve;
 - albedo uses `sRGB`;
 - roughness and normal use `Raw`;

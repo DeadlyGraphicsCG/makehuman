@@ -177,6 +177,7 @@ and saves a clean Maya ASCII scene.
 | `--template` | Path | subject `lightingscene_v001.mb`, then versioned template | Lighting/camera Maya scene to open before mesh import. |
 | `--out` | Path | `outputs/characters/<subject>/maya/<subject>_arnold_skin_clean.ma` | Clean saved Maya scene. |
 | `--layout` | str | `three` | Build one centered mesh or a three-copy comparison layout. |
+| `--lighting` | str | `physical_sky` | Generated lighting rig: `physical_sky` creates Arnold `aiPhysicalSky` + `aiSkyDomeLight`, `area` uses the legacy two-light rig, `none` creates no generated lights. |
 | `--front-rotate-y` | float | `-24.0` | Yaw correction for the center mesh. |
 | `--arnold-subdiv-type` | str | `catclark` | Arnold subdivision: `catclark`, `linear`, or `none`. |
 | `--arnold-subdiv-iterations` | int | `2` | Arnold per-shape subdivision iterations. |
