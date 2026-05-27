@@ -135,6 +135,7 @@ def run(
     image: Path | None = None,
     subdivisions: int = 2,
     amplify: float = 1.5,
+    canonical_obj: Path = learned.CANONICAL_OBJ,
 ) -> Path:
     image = resolve_character_image(subject, image)
     if not image.exists():
@@ -167,7 +168,12 @@ def run(
     log.info("=" * 72)
     log.info("STEP 3/6 : learned face mesh (subdivisions=%d)", subdivisions)
     log.info("=" * 72)
-    learned.reconstruct(image, learned_obj, subdivisions=subdivisions)
+    learned.reconstruct(
+        image,
+        learned_obj,
+        subdivisions=subdivisions,
+        canonical_obj=canonical_obj,
+    )
 
     log.info("=" * 72)
     log.info("STEP 4/6 : render canon proportionality report")
@@ -220,13 +226,23 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--subdivisions", type=int, default=2)
     p.add_argument("--amplify", type=float, default=1.5)
+    p.add_argument(
+        "--canonical",
+        type=Path,
+        default=learned.CANONICAL_OBJ,
+        help=(
+            "Canonical topology OBJ for the learned mesh stage. Use "
+            "dg_face_pipeline/canonical_face_model_v002.obj to test the "
+            "local quad-dominant topology."
+        ),
+    )
     return p.parse_args(argv)
 
 
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        out = run(args.subject, args.image, args.subdivisions, args.amplify)
+        out = run(args.subject, args.image, args.subdivisions, args.amplify, args.canonical)
         log.info("DONE -- final frame: %s", out)
     except FileNotFoundError as exc:
         log.error("Missing input: %s", exc); return 2

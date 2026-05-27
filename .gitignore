@@ -26,6 +26,7 @@ __pycache__/
 
 # DG face pipeline vendored 3rd-party assets (Apache-2.0 from google/mediapipe)
 !dg_face_pipeline/canonical_face_model.obj
+!dg_face_pipeline/canonical_face_model_v002.obj
 
 # DG face pipeline -- generated outputs stay local
 dg_face_pipeline/outputs/

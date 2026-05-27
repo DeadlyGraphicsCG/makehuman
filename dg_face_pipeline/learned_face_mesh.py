@@ -73,31 +73,38 @@ def write_mtl_for_obj(out_obj: Path, texture: Path, material_name: str = DEFAULT
 
 
 # -----------------------------------------------------------------------------
-# Canonical triangulation loader
+# Canonical topology loader
 # -----------------------------------------------------------------------------
-def load_canonical_triangles(obj_path: Path) -> np.ndarray:
-    """Parse triangle indices from MediaPipe's canonical_face_model.obj.
+def load_canonical_faces(obj_path: Path) -> List[List[int]]:
+    """Parse polygon vertex indices from a canonical face OBJ.
 
     OBJ faces may appear as "v", "v/vt", or "v/vt/vn"; we only need the v
-    component. Quads (rare here) are fan-triangulated. Indices are converted
-    from 1-based (OBJ convention) to 0-based.
+    component because runtime UVs come from MediaPipe image coordinates. Indices
+    are converted from 1-based (OBJ convention) to 0-based. Crucially, quads are
+    preserved for Catmull-Clark tests instead of being fan-triangulated.
     """
     face_re = re.compile(r"^f\s+")
-    tris: List[List[int]] = []
+    faces: List[List[int]] = []
     with obj_path.open("r", encoding="utf-8") as fh:
         for line in fh:
             if not face_re.match(line):
                 continue
             parts = line.split()[1:]
             idx = [int(p.split("/")[0]) - 1 for p in parts]
-            if len(idx) == 3:
-                tris.append(idx)
-            elif len(idx) == 4:
-                tris.append([idx[0], idx[1], idx[2]])
-                tris.append([idx[0], idx[2], idx[3]])
-            elif len(idx) > 4:
-                for i in range(1, len(idx) - 1):
-                    tris.append([idx[0], idx[i], idx[i + 1]])
+            if len(idx) >= 3:
+                faces.append(idx)
+    return faces
+
+
+def triangulate_faces(faces: List[List[int]]) -> np.ndarray:
+    """Fan-triangulate arbitrary polygon faces for the old midpoint subdivider."""
+    tris: List[List[int]] = []
+    for idx in faces:
+        if len(idx) == 3:
+            tris.append(idx)
+        else:
+            for i in range(1, len(idx) - 1):
+                tris.append([idx[0], idx[i], idx[i + 1]])
     return np.asarray(tris, dtype=np.int64)
 
 
@@ -164,11 +171,16 @@ def subdivide_n(
 # -----------------------------------------------------------------------------
 # Reconstruction
 # -----------------------------------------------------------------------------
-def reconstruct(image_path: Path, out_obj: Path, subdivisions: int = 0) -> Path:
+def reconstruct(
+    image_path: Path,
+    out_obj: Path,
+    subdivisions: int = 0,
+    canonical_obj: Path = CANONICAL_OBJ,
+) -> Path:
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
-    if not CANONICAL_OBJ.exists():
-        raise FileNotFoundError(f"Canonical face model missing: {CANONICAL_OBJ}")
+    if not canonical_obj.exists():
+        raise FileNotFoundError(f"Canonical face model missing: {canonical_obj}")
 
     img_bgr = cv2.imread(str(image_path))
     if img_bgr is None:
@@ -199,13 +211,16 @@ def reconstruct(image_path: Path, out_obj: Path, subdivisions: int = 0) -> Path:
     )
     log.info("Reconstructed %d landmark verts from FaceMesh", len(verts))
 
-    tris = load_canonical_triangles(CANONICAL_OBJ)
-    log.info("Loaded %d canonical triangles", len(tris))
+    faces = load_canonical_faces(canonical_obj)
+    face_sizes: dict[int, int] = {}
+    for face in faces:
+        face_sizes[len(face)] = face_sizes.get(len(face), 0) + 1
+    log.info("Loaded %d canonical faces from %s (%s)", len(faces), canonical_obj.name, face_sizes)
 
-    max_tri_idx = int(tris.max())
-    if max_tri_idx >= len(verts):
+    max_face_idx = max(max(face) for face in faces)
+    if max_face_idx >= len(verts):
         raise RuntimeError(
-            f"Triangulation references vertex {max_tri_idx} but only "
+            f"Canonical topology references vertex {max_face_idx} but only "
             f"{len(verts)} predicted from FaceMesh"
         )
 
@@ -214,9 +229,25 @@ def reconstruct(image_path: Path, out_obj: Path, subdivisions: int = 0) -> Path:
     # MediaPipe convention (origin top-left). Vertex index == UV index, so the
     # face references will be of the form "f v/v v/v v/v".
     uvs = np.array([[lm.x, 1.0 - lm.y] for lm in lms], dtype=np.float64)
+    active_vert_count = max_face_idx + 1
+    if active_vert_count < len(verts):
+        log.info(
+            "Canonical topology uses %d/%d FaceMesh landmarks; trimming unused trailing verts",
+            active_vert_count, len(verts),
+        )
+        verts = verts[:active_vert_count]
+        uvs = uvs[:active_vert_count]
 
     if subdivisions > 0:
+        if any(len(face) != 3 for face in faces):
+            log.warning(
+                "Canonical topology contains non-triangle faces; fan-triangulating "
+                "before midpoint subdivision. Use --subdivisions 0 to preserve quads "
+                "for Catmull-Clark in Maya."
+            )
+        tris = triangulate_faces(faces)
         verts, uvs, tris = subdivide_n(verts, uvs, tris, subdivisions)
+        faces = tris.tolist()
 
     out_obj.parent.mkdir(parents=True, exist_ok=True)
     texture = copy_texture_for_obj(image_path, out_obj)
@@ -224,8 +255,9 @@ def reconstruct(image_path: Path, out_obj: Path, subdivisions: int = 0) -> Path:
     with out_obj.open("w", encoding="utf-8") as fh:
         fh.write("# Face mesh reconstructed via MediaPipe FaceMesh\n")
         fh.write(f"# Source image: {image_path}\n")
+        fh.write(f"# Canonical topology: {canonical_obj}\n")
         fh.write(f"# Image size: {w} x {h}\n")
-        fh.write(f"# Verts: {len(verts)}  UVs: {len(uvs)}  Triangles: {len(tris)}\n")
+        fh.write(f"# Verts: {len(verts)}  UVs: {len(uvs)}  Faces: {len(faces)}\n")
         fh.write(f"mtllib {mtl.name}\n")
         fh.write("g face_mesh\n")
         fh.write(f"usemtl {DEFAULT_MATERIAL_NAME}\n")
@@ -233,13 +265,10 @@ def reconstruct(image_path: Path, out_obj: Path, subdivisions: int = 0) -> Path:
             fh.write(f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n")
         for uv in uvs:
             fh.write(f"vt {uv[0]:.6f} {uv[1]:.6f}\n")
-        for t in tris:
+        for face in faces:
             # Vertex index == UV index for this mesh (1-indexed in OBJ).
-            fh.write(
-                f"f {t[0] + 1}/{t[0] + 1} "
-                f"{t[1] + 1}/{t[1] + 1} "
-                f"{t[2] + 1}/{t[2] + 1}\n"
-            )
+            parts = [f"{idx + 1}/{idx + 1}" for idx in face]
+            fh.write("f " + " ".join(parts) + "\n")
     log.info("Wrote face mesh OBJ: %s (verts+UVs)", out_obj)
     return out_obj
 
@@ -272,13 +301,28 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
             "triangles -- visibly smoother texture and still <1s to render."
         ),
     )
+    parser.add_argument(
+        "--canonical",
+        type=Path,
+        default=CANONICAL_OBJ,
+        help=(
+            "Canonical topology OBJ to reuse. Defaults to Google's triangulated "
+            "MediaPipe canonical_face_model.obj. Pass canonical_face_model_v002.obj "
+            "to preserve the local quad-dominant topology."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        reconstruct(args.image, args.out, subdivisions=args.subdivisions)
+        reconstruct(
+            args.image,
+            args.out,
+            subdivisions=args.subdivisions,
+            canonical_obj=args.canonical,
+        )
     except FileNotFoundError as exc:
         log.error("Missing input: %s", exc)
         return 2

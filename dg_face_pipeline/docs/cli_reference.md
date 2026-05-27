@@ -15,6 +15,7 @@ the Maya handoff.
 | `--image` | Path | `examples/<subject>/ref.png` | Optional source portrait override. Falls back to legacy `examples/<subject>_ref.png`. |
 | `--subdivisions` | int | `2` | Mesh-densification passes. `0` = 478 verts, `1` = 1843, `2` = 7267, `3` = 28867. |
 | `--amplify` | float | `1.5` | Multiplier on MH modifier values. Above ~2.5 begins distorting MH geometry. |
+| `--canonical` | Path | `canonical_face_model.obj` | Canonical topology OBJ for the learned mesh stage. Use v002 with `--subdivisions 0` to preserve quads. |
 
 ```powershell
 python dg_face_pipeline\run_full_pipeline.py --subject winona
@@ -49,6 +50,10 @@ Photo → MediaPipe-FaceMesh OBJ with UVs.
 | `--image` | Path | `examples/winona_ref.png` | Source portrait. |
 | `--out`   | Path | `outputs/data/subject_face_mesh.obj` | Output OBJ. Vertex idx == UV idx. |
 | `--subdivisions` | int | `0` | Midpoint-subdivision passes. |
+| `--canonical` | Path | `canonical_face_model.obj` | Canonical topology OBJ. Use `canonical_face_model_v002.obj` for the local quad-dominant experiment. |
+
+When using a quad-dominant canonical topology, keep `--subdivisions 0` so the
+output OBJ preserves quads for Maya/Arnold Catmull-Clark subdivision.
 
 ## render_face.py
 4-panel MH comparison render.

@@ -209,6 +209,34 @@ The deeper production answer remains a fitted quad MakeHuman head with proper
 loops and Catmull-Clark subdivision. The MediaPipe triangle mesh is the
 likeness guide.
 
+## Quad-Dominant Canonical v002
+
+A local experiment can use `canonical_face_model_v002.obj` as the learned mesh
+topology instead of Google's default triangulated canonical OBJ. This keeps the
+MediaPipe runtime landmark vertex positions but writes the selected canonical
+faces into the subject OBJ.
+
+Current v002 topology audit:
+
+- `468` canonical vertices and UVs
+- `508` faces total
+- `390` quads
+- `118` triangles
+
+Use it with no midpoint subdivision, then let Maya/Arnold Catmull-Clark do the
+smoothing:
+
+```powershell
+python dg_face_pipeline\learned_face_mesh.py --image dg_face_pipeline\examples\winona\ref.png --out dg_face_pipeline\outputs\characters\winona_v002\data\winona_v002_face_mesh.obj --canonical dg_face_pipeline\canonical_face_model_v002.obj --subdivisions 0
+python dg_face_pipeline\generate_texture_maps.py --subject winona_v002 --photo dg_face_pipeline\examples\winona\ref.png
+python dg_face_pipeline\export_maya_arnold_scene.py --subject winona_v002 --texture dg_face_pipeline\examples\winona\ref.png --height-cm 22 --arnold-subdiv-type catclark --arnold-subdiv-iterations 2 --layout three --front-rotate-y -24
+mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject winona_v002 --template dg_face_pipeline\outputs\characters\winona\maya\lightingscene_v001.mb --arnold-subdiv-type catclark --arnold-subdiv-iterations 2
+```
+
+This is still a MediaPipe frontal mask, not the final MakeHuman topology. Its
+value is look-dev: checking whether the quad-dominant face layout responds more
+cleanly to Catmull-Clark than the official triangle mesh.
+
 ## Maya 2027 / MtoA Notes
 
 - Maya 2027 ships with MtoA 5.6.0 / Arnold 7.5.0.0.

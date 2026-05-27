@@ -124,6 +124,39 @@ def mesh_parent_transforms(cmds, nodes: Iterable[str] | None = None) -> list[str
     return parents
 
 
+def capture_template_layout(cmds) -> tuple[float, float]:
+    """Return the template mesh center height and horizontal spacing."""
+    transforms = mesh_parent_transforms(cmds)
+    if not transforms:
+        return 0.0, 24.0
+    centers: list[tuple[float, float]] = []
+    for transform in transforms:
+        try:
+            bbox = cmds.exactWorldBoundingBox(transform)
+        except Exception:
+            continue
+        center_x = (bbox[0] + bbox[3]) * 0.5
+        center_y = (bbox[1] + bbox[4]) * 0.5
+        centers.append((center_x, center_y))
+    if not centers:
+        return 0.0, 24.0
+    centers_x = sorted(x for x, _y in centers)
+    centers_y = sorted(y for _x, y in centers)
+    center_y = centers_y[len(centers_y) // 2]
+    spacing = 24.0
+    if len(centers_x) >= 2:
+        gaps = [
+            abs(centers_x[i + 1] - centers_x[i])
+            for i in range(len(centers_x) - 1)
+            if abs(centers_x[i + 1] - centers_x[i]) > 1e-3
+        ]
+        if gaps:
+            gaps = sorted(gaps)
+            spacing = gaps[len(gaps) // 2]
+    log.info("Captured template mesh layout: centerY %.3f, x spacing %.3f", center_y, spacing)
+    return center_y, spacing
+
+
 def clear_template_meshes(cmds) -> None:
     for group in ("DG_FACE_PIPELINE_GRP", "DG_FACE_LOOKDEV_GRP"):
         if cmds.objExists(group):
@@ -314,6 +347,26 @@ def create_file_node(cmds, subject: str, label: str, texture: Path, color_space:
     return file_node
 
 
+def create_albedo_grade(cmds, subject: str, albedo_file: str) -> str:
+    """Deepen photo blacks before the color reaches the skin shader."""
+    try:
+        grade = cmds.shadingNode("aiColorCorrect", asUtility=True, name=f"{subject}_albedo_grade_aiColorCorrect")
+    except Exception:
+        log.warning("aiColorCorrect unavailable; using raw albedo file")
+        return albedo_file
+    set_if_exists(cmds, grade, "gamma", 1.12)
+    set_if_exists(cmds, grade, "contrast", 1.28)
+    set_if_exists(cmds, grade, "contrastPivot", 0.32)
+    set_if_exists(cmds, grade, "exposure", -0.12)
+    try:
+        if cmds.objExists(f"{grade}.multiply"):
+            cmds.setAttr(f"{grade}.multiply", 0.92, 0.92, 0.92, type="double3")
+    except Exception:
+        pass
+    connect_if_possible(cmds, f"{albedo_file}.outColor", f"{grade}.input")
+    return grade
+
+
 def create_skin_shader(
     cmds,
     subject: str,
@@ -336,11 +389,13 @@ def create_skin_shader(
     set_if_exists(cmds, shader, "specularRoughness", 0.5)
     set_if_exists(cmds, shader, "metalness", 0.0)
     set_if_exists(cmds, shader, "transmission", 0.0)
-    set_if_exists(cmds, shader, "subsurface", 0.22)
+    set_if_exists(cmds, shader, "subsurface", 0.28)
+    set_if_exists(cmds, shader, "subsurfaceScale", 0.12)
+    set_if_exists(cmds, shader, "subsurfaceType", 1)
     for attr, values in (
         ("baseColor", (0.78, 0.48, 0.38)),
-        ("subsurfaceColor", (1.0, 0.58, 0.42)),
-        ("subsurfaceRadius", (1.0, 0.35, 0.18)),
+        ("subsurfaceColor", (1.0, 0.50, 0.34)),
+        ("subsurfaceRadius", (1.0, 0.45, 0.22)),
     ):
         try:
             if cmds.objExists(f"{shader}.{attr}"):
@@ -349,7 +404,8 @@ def create_skin_shader(
             pass
 
     albedo_node = create_file_node(cmds, subject, "albedo", albedo, "sRGB")
-    connect_if_possible(cmds, f"{albedo_node}.outColor", f"{shader}.baseColor")
+    albedo_grade = create_albedo_grade(cmds, subject, albedo_node)
+    connect_if_possible(cmds, f"{albedo_grade}.outColor", f"{shader}.baseColor")
     if roughness and roughness.exists():
         rough_node = create_file_node(cmds, subject, "roughness", roughness, "Raw")
         connect_if_possible(cmds, f"{rough_node}.outColorR", f"{shader}.specularRoughness")
@@ -392,6 +448,7 @@ def import_obj(cmds, obj: Path, subject: str) -> list[str]:
 
 def apply_smoothing(cmds, transforms: Iterable[str], subdiv_type: str, subdiv_iterations: int) -> None:
     subdiv_type_id = ARNOLD_SUBDIV_TYPES[subdiv_type]
+    viewport_smooth = min(max(0, subdiv_iterations), 3)
     for transform in transforms:
         shapes = cmds.listRelatives(transform, allDescendents=True, type="mesh", fullPath=True) or []
         try:
@@ -401,11 +458,48 @@ def apply_smoothing(cmds, transforms: Iterable[str], subdiv_type: str, subdiv_it
             log.debug("Could not soften %s: %s", transform, exc)
         for shape in shapes:
             set_if_exists(cmds, shape, "displaySmoothMesh", 2)
-            set_if_exists(cmds, shape, "smoothLevel", 1)
+            set_if_exists(cmds, shape, "smoothLevel", viewport_smooth)
             set_if_exists(cmds, shape, "renderSmoothLevel", max(0, subdiv_iterations))
             set_if_exists(cmds, shape, "aiSubdivType", subdiv_type_id)
             set_if_exists(cmds, shape, "aiSubdivIterations", max(0, subdiv_iterations))
             set_if_exists(cmds, shape, "aiSubdivSmoothDerivs", True)
+
+
+def bake_catclark_subdivision(cmds, transforms: Iterable[str], levels: int) -> list[str]:
+    """Apply Catmull-Clark subdivision as real geometry for sculpt/look-dev."""
+    if levels <= 0:
+        return list(transforms)
+    baked: list[str] = []
+    for transform in transforms:
+        if not cmds.objExists(transform):
+            continue
+        try:
+            cmds.select(transform, replace=True)
+            cmds.polySmooth(
+                transform,
+                divisions=levels,
+                continuity=1.0,
+                keepBorder=True,
+                keepMapBorders=1,
+                smoothUVs=True,
+                constructionHistory=False,
+            )
+            cmds.delete(transform, constructionHistory=True)
+            baked.append(transform)
+            shapes = cmds.listRelatives(transform, allDescendents=True, type="mesh", fullPath=True) or []
+            face_count = 0
+            vert_count = 0
+            if shapes:
+                face_count = int(cmds.polyEvaluate(shapes[0], face=True) or 0)
+                vert_count = int(cmds.polyEvaluate(shapes[0], vertex=True) or 0)
+            log.info(
+                "Baked Catmull-Clark x%d on %s -> %d verts, %d faces",
+                levels, transform, vert_count, face_count,
+            )
+        except Exception as exc:
+            log.warning("Could not bake Catmull-Clark x%d on %s: %s", levels, transform, exc)
+            baked.append(transform)
+    return baked
 
 
 def assign_shader(cmds, transforms: Iterable[str], shading_group: str) -> None:
@@ -457,20 +551,30 @@ def delete_unused_shader_nodes(cmds, keep_prefix: str) -> None:
         log.info("Removed %d unused OBJ/template shader nodes", removed)
 
 
-def layout_meshes(cmds, subject: str, main: str, layout: str, front_rotate_y: float) -> list[str]:
+def layout_meshes(
+    cmds,
+    subject: str,
+    main: str,
+    layout: str,
+    front_rotate_y: float,
+    center_y: float,
+    x_spacing: float,
+) -> list[str]:
     group = cmds.group(empty=True, name="DG_FACE_PIPELINE_GRP")
+    cmds.setAttr(f"{group}.translateY", center_y)
     main = cmds.parent(main, group)[0]
     main = cmds.rename(main, f"{subject}_GEO_center")
     cmds.setAttr(f"{main}.translate", 0, 0, 0, type="double3")
-    cmds.setAttr(f"{main}.rotateY", front_rotate_y)
+    center_yaw = 0.0 if layout == "three" else front_rotate_y
+    cmds.setAttr(f"{main}.rotateY", center_yaw)
     transforms = [main]
     if layout == "three":
         left = cmds.duplicate(main, rr=True, name=f"{subject}_GEO_left")[0]
         right = cmds.duplicate(main, rr=True, name=f"{subject}_GEO_right")[0]
-        cmds.setAttr(f"{left}.translateX", -24)
-        cmds.setAttr(f"{left}.rotateY", front_rotate_y + 24.0)
-        cmds.setAttr(f"{right}.translateX", 24)
-        cmds.setAttr(f"{right}.rotateY", front_rotate_y - 24.0)
+        cmds.setAttr(f"{left}.translateX", -x_spacing)
+        cmds.setAttr(f"{left}.rotateY", -45.0)
+        cmds.setAttr(f"{right}.translateX", x_spacing)
+        cmds.setAttr(f"{right}.rotateY", 45.0)
         transforms.extend([left, right])
     return transforms
 
@@ -487,11 +591,13 @@ def build_scene(
     front_rotate_y: float,
     arnold_subdiv_type: str,
     arnold_subdiv_iterations: int,
+    bake_subdivision_levels: int,
     clear_meshes: bool,
 ) -> Path:
     cmds = initialize_maya()
     load_plugins(cmds)
     open_template_or_new(cmds, template)
+    template_center_y, template_x_spacing = capture_template_layout(cmds)
     if clear_meshes:
         clear_template_meshes(cmds)
     create_fallback_camera_and_lights(cmds)
@@ -502,9 +608,20 @@ def build_scene(
         pass
     _, sg = create_skin_shader(cmds, subject, albedo, roughness, normal)
     imported = import_obj(cmds, obj, subject)
-    transforms = layout_meshes(cmds, subject, imported[0], layout, front_rotate_y)
+    transforms = layout_meshes(
+        cmds,
+        subject,
+        imported[0],
+        layout,
+        front_rotate_y,
+        template_center_y,
+        template_x_spacing,
+    )
     assign_shader(cmds, transforms, sg)
     delete_unused_shader_nodes(cmds, subject)
+    if bake_subdivision_levels > 0:
+        transforms = bake_catclark_subdivision(cmds, transforms, bake_subdivision_levels)
+        assign_shader(cmds, transforms, sg)
     apply_smoothing(cmds, transforms, arnold_subdiv_type, arnold_subdiv_iterations)
     aim_render_camera_at_meshes(cmds, transforms)
     remove_unknown_scene_data(cmds)
@@ -535,6 +652,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--front-rotate-y", type=float, default=-24.0)
     p.add_argument("--arnold-subdiv-type", choices=sorted(ARNOLD_SUBDIV_TYPES), default="catclark")
     p.add_argument("--arnold-subdiv-iterations", type=int, default=2)
+    p.add_argument(
+        "--bake-subdivision-levels",
+        type=int,
+        default=0,
+        help=(
+            "Bake this many Catmull-Clark subdivision levels into real mesh "
+            "geometry before saving. 0 keeps a low-res control cage with Arnold "
+            "render subdivision attrs."
+        ),
+    )
     p.add_argument("--keep-template-meshes", action="store_true")
     return p.parse_args(argv)
 
@@ -566,6 +693,7 @@ def main(argv: list[str] | None = None) -> int:
             args.front_rotate_y,
             args.arnold_subdiv_type,
             args.arnold_subdiv_iterations,
+            max(0, args.bake_subdivision_levels),
             not args.keep_template_meshes,
         )
     except Exception as exc:
