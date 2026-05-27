@@ -74,6 +74,17 @@ def load_plugins(cmds) -> None:
             log.warning("Could not load Maya plugin %s: %s", plugin, exc)
 
 
+def require_arnold(cmds) -> None:
+    """Fail the build instead of silently downgrading to Maya materials."""
+    if not cmds.pluginInfo("mtoa", query=True, loaded=True):
+        raise RuntimeError("MtoA is not loaded; cannot build an Arnold look-dev scene")
+    try:
+        probe = cmds.createNode("aiStandardSurface", name="DG_ARNOLD_SHADER_PROBE")
+        cmds.delete(probe)
+    except Exception as exc:
+        raise RuntimeError("aiStandardSurface is unavailable; Arnold shader build cannot continue") from exc
+
+
 def set_if_exists(cmds, node: str, attr: str, value, attr_type: str | None = None) -> None:
     plug = f"{node}.{attr}"
     try:
@@ -93,6 +104,35 @@ def connect_if_possible(cmds, src: str, dst: str, force: bool = True) -> None:
             cmds.connectAttr(src, dst, force=force)
     except Exception as exc:
         log.debug("Could not connect %s -> %s: %s", src, dst, exc)
+
+
+def first_existing_plug(cmds, node: str, attrs: Iterable[str]) -> str | None:
+    for attr in attrs:
+        plug = f"{node}.{attr}"
+        if cmds.objExists(plug):
+            return plug
+    return None
+
+
+def set_first_if_exists(cmds, node: str, attrs: Iterable[str], value, attr_type: str | None = None) -> None:
+    plug = first_existing_plug(cmds, node, attrs)
+    if plug is None:
+        return
+    try:
+        if attr_type:
+            cmds.setAttr(plug, value, type=attr_type)
+        elif isinstance(value, tuple):
+            cmds.setAttr(plug, *value, type="double3")
+        else:
+            cmds.setAttr(plug, value)
+    except Exception as exc:
+        log.debug("Could not set %s: %s", plug, exc)
+
+
+def connect_first_if_possible(cmds, src: str, dst_node: str, dst_attrs: Iterable[str]) -> None:
+    dst = first_existing_plug(cmds, dst_node, dst_attrs)
+    if dst is not None:
+        connect_if_possible(cmds, src, dst)
 
 
 def open_template_or_new(cmds, template: Path | None) -> None:
@@ -401,41 +441,33 @@ def create_skin_shader(
     roughness: Path | None,
     normal: Path | None,
 ) -> tuple[str, str]:
-    shader_type = "aiStandardSurface"
-    try:
-        shader = cmds.shadingNode(shader_type, asShader=True, name=f"{subject}_skin_aiStandardSurface")
-    except Exception:
-        shader_type = "standardSurface"
-        shader = cmds.shadingNode(shader_type, asShader=True, name=f"{subject}_skin_standardSurface")
-        log.warning("Fell back to Maya standardSurface because aiStandardSurface was unavailable")
+    shader = cmds.shadingNode("aiStandardSurface", asShader=True, name=f"{subject}_skin_aiStandardSurface")
+    if cmds.nodeType(shader) != "aiStandardSurface":
+        raise RuntimeError(f"Expected aiStandardSurface, got {cmds.nodeType(shader)} for {shader}")
     sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=f"{subject}_skin_SG")
     connect_if_possible(cmds, f"{shader}.outColor", f"{sg}.surfaceShader")
 
-    set_if_exists(cmds, shader, "base", 0.92)
-    set_if_exists(cmds, shader, "specular", 0.42)
-    set_if_exists(cmds, shader, "specularRoughness", 0.5)
-    set_if_exists(cmds, shader, "metalness", 0.0)
-    set_if_exists(cmds, shader, "transmission", 0.0)
-    set_if_exists(cmds, shader, "subsurface", 0.28)
-    set_if_exists(cmds, shader, "subsurfaceScale", 0.12)
-    set_if_exists(cmds, shader, "subsurfaceType", 1)
-    for attr, values in (
-        ("baseColor", (0.78, 0.48, 0.38)),
-        ("subsurfaceColor", (1.0, 0.50, 0.34)),
-        ("subsurfaceRadius", (1.0, 0.45, 0.22)),
+    set_first_if_exists(cmds, shader, ("base", "base_weight"), 0.92)
+    set_first_if_exists(cmds, shader, ("specular", "specular_weight"), 0.42)
+    set_first_if_exists(cmds, shader, ("specularRoughness", "specular_roughness"), 0.5)
+    set_first_if_exists(cmds, shader, ("metalness", "metalness"), 0.0)
+    set_first_if_exists(cmds, shader, ("transmission", "transmission_weight"), 0.0)
+    set_first_if_exists(cmds, shader, ("subsurface", "subsurface_weight"), 0.28)
+    set_first_if_exists(cmds, shader, ("subsurfaceScale", "subsurface_scale"), 0.12)
+    set_first_if_exists(cmds, shader, ("subsurfaceType", "subsurface_type"), 1)
+    for attrs, values in (
+        (("baseColor", "base_color"), (0.78, 0.48, 0.38)),
+        (("subsurfaceColor", "subsurface_color"), (1.0, 0.50, 0.34)),
+        (("subsurfaceRadius", "subsurface_radius"), (1.0, 0.45, 0.22)),
     ):
-        try:
-            if cmds.objExists(f"{shader}.{attr}"):
-                cmds.setAttr(f"{shader}.{attr}", *values, type="double3")
-        except Exception:
-            pass
+        set_first_if_exists(cmds, shader, attrs, values)
 
     albedo_node = create_file_node(cmds, subject, "albedo", albedo, "sRGB")
     albedo_grade = create_albedo_grade(cmds, subject, albedo_node)
-    connect_if_possible(cmds, f"{albedo_grade}.outColor", f"{shader}.baseColor")
+    connect_first_if_possible(cmds, f"{albedo_grade}.outColor", shader, ("baseColor", "base_color"))
     if roughness and roughness.exists():
         rough_node = create_file_node(cmds, subject, "roughness", roughness, "Raw")
-        connect_if_possible(cmds, f"{rough_node}.outColorR", f"{shader}.specularRoughness")
+        connect_first_if_possible(cmds, f"{rough_node}.outColorR", shader, ("specularRoughness", "specular_roughness"))
     if normal and normal.exists():
         normal_node = create_file_node(cmds, subject, "normal", normal, "Raw")
         bump = cmds.shadingNode("bump2d", asUtility=True, name=f"{subject}_normal_bump2d")
@@ -443,7 +475,7 @@ def create_skin_shader(
         set_if_exists(cmds, bump, "bumpDepth", 0.08)
         set_if_exists(cmds, bump, "bumpFilter", 1.25)
         connect_if_possible(cmds, f"{normal_node}.outAlpha", f"{bump}.bumpValue")
-        connect_if_possible(cmds, f"{bump}.outNormal", f"{shader}.normalCamera")
+        connect_first_if_possible(cmds, f"{bump}.outNormal", shader, ("normalCamera", "normal", "n"))
     return shader, sg
 
 
@@ -624,6 +656,7 @@ def build_scene(
 ) -> Path:
     cmds = initialize_maya()
     load_plugins(cmds)
+    require_arnold(cmds)
     open_template_or_new(cmds, template)
     template_center_y, template_x_spacing = capture_template_layout(cmds)
     if clear_meshes:

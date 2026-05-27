@@ -101,6 +101,40 @@ specular highlights, makeup, camera response, and compression. Use it for fast
 likeness inspection, then replace it later with proper albedo/normal/
 displacement bakes.
 
+## Autodesk Help-Derived Arnold Shader Contract
+
+This contract is derived from Autodesk Product Help / Arnold for Maya docs, not
+from memory. Generated Maya look-dev scenes must pass this contract before they
+are marked valid.
+
+- Use `aiStandardSurface`.
+- Fail the build if MtoA or `aiStandardSurface` is unavailable. Do not silently
+  downgrade to Maya `standardSurface`.
+- Connect the generated albedo to Base Color:
+  `file.outColor` or `aiColorCorrect.outColor` -> `aiStandardSurface.baseColor`.
+- Connect roughness as scalar data:
+  `roughness_file.outColorR` -> `aiStandardSurface.specularRoughness`.
+- Set albedo file color space to `sRGB`.
+- Set roughness and normal file color spaces to `Raw`.
+- Connect tangent normal maps through Maya `bump2d`:
+  `normal_file.outAlpha` -> `bump2d.bumpValue`,
+  `bump2d.outNormal` -> `aiStandardSurface.normalCamera`.
+- Set `bump2d.bumpInterp=1` for tangent-space normals.
+- Assign the shader through one shading group to every generated mesh shape.
+- Use Arnold physical sky lighting as:
+  `aiPhysicalSky.outColor` -> `aiSkyDomeLight.color`.
+- Do not use the legacy generated two-area-light rig unless explicitly requested
+  with `--lighting area`.
+
+Relevant Autodesk Help references:
+
+- `Map a 2D or 3D texture to a material` documents file texture connections to
+  material color and normal maps through `bump2d`.
+- `Standard Surface` documents Arnold Standard Surface normal-map handling and
+  Raw color management for normal maps.
+- `Physical Sky` documents connecting `physical_sky` to `skydome_light.color`
+  instead of deprecated background/sky routes.
+
 Initial Arnold skin shader guidance:
 
 - Use `aiStandardSurface`.

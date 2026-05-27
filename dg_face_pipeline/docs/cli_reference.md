@@ -195,6 +195,25 @@ If `mayapy` is not visible in a freshly opened terminal, use the full Maya
 & "C:\Program Files\Autodesk\Maya2027\bin\mayapy.exe" dg_face_pipeline\build_maya_arnold_scene.py --subject winona
 ```
 
+## validate_maya_arnold_scene.py
+Maya 2027 scene validator. Run with Maya's Python (`mayapy.exe`). It opens a
+generated `.ma` or `.mb` and fails unless the scene uses the expected Arnold
+look-dev graph: renderer set to Arnold, `aiStandardSurface` assigned to all
+generated meshes, albedo `sRGB`, roughness/normal `Raw`, tangent-space
+`bump2d`, physical sky connected to skydome, and no legacy area lights.
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `scene` | Path | *required* | Maya scene to validate. |
+| `--subject` | str | *required* | Character slug used for generated node names. |
+| `--no-three` | bool | `false` | Do not require center/left/right three-up layout. |
+| `--no-physical-sky` | bool | `false` | Do not require physical sky + skydome and no area lights. |
+| `--json-out` | Path | none | Optional JSON validation report. |
+
+```powershell
+& "C:\Program Files\Autodesk\Maya2027\bin\mayapy.exe" dg_face_pipeline\validate_maya_arnold_scene.py dg_face_pipeline\outputs\characters\winona_v003\maya\winona_v003_arnold_skin_origin.mb --subject winona_v003
+```
+
 ## segment_face_regions.py
 Post-processor that splits a learned-mesh OBJ into lip / eye / brow / skin
 groups using MediaPipe's landmark sets. Writes a parallel `_seg.obj` +
