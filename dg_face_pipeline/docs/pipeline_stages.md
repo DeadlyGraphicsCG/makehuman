@@ -8,7 +8,8 @@ asset changes.
 | Stage | Command | Main outputs | Rerun when |
 |-------|---------|--------------|------------|
 | Analyze | `python dg_face_pipeline\face_proportion_analyzer.py --image <ref> --out <json>` | `<subject>_face_proportions.json` | Landmark choice, canon rules, ratios, face bbox, or head-pose logic changes. |
-| Mesh | `python dg_face_pipeline\learned_face_mesh.py --image <ref> --out <obj> --subdivisions 2` | `<subject>_face_mesh.obj` | MediaPipe mesh generation, canonical topology, subdivisions, UVs, or source photo changes. |
+| Mesh | `python dg_face_pipeline\learned_face_mesh.py --image <ref> --out <obj> --subdivisions 2` | `<subject>_face_mesh.obj` | MediaPipe mesh generation, canonical topology, subdivisions, UV mode, or source photo changes. |
+| Canonical UV atlas | `python dg_face_pipeline\project_canonical_texture.py --photo <ref> --canonical <canonical.obj> --out <albedo.png>` | canonical albedo PNG + occupancy mask | Reproject the portrait when the source photo, runtime landmark UVs, canonical OBJ `vt` records, or atlas resolution changes. |
 | MediaPipe scaffold | `python dg_face_pipeline\export_mediapipe_scaffold.py --subject <subject>` | point-only OBJ + CSV | Retopo/refit scaffold needed without face records. |
 | MakeHuman morph | `python dg_face_pipeline\step_c_apply_modifiers.py --proportions <json> --out_obj <obj>` | `<subject>_morphed.obj` | Modifier mapping, MakeHuman target application, amplify value, or analysis JSON changes. |
 | Debug renders | `python dg_face_pipeline\run_full_pipeline.py --subject <subject>` | canon/MH/learned/full PNGs | Render style changes or any upstream analyze/mesh/MH output changes. |
@@ -87,3 +88,10 @@ python dg_face_pipeline\learned_face_mesh.py --image <ref> --out <obj> --canonic
 
 Keeping `--subdivisions 0` preserves the v002 face sizes so Maya can do the
 Catmull-Clark smoothing.
+
+## Retopo / UV / Bake Contract
+
+The branch-level contract for quad topology work, canonical UV reprojection,
+adapter-based baking, and external-only TexturingXYZ integration lives in
+`retopo_texture_bake_contract.md`. Follow that contract when adding new mesh
+or texture stages so parallel agent work stays compatible.

@@ -10,6 +10,9 @@ parallel back-ends:
    landmark index space but uses a quad-dominant 508-face layout
    (390 quads / 118 tris) for Maya Catmull-Clark tests. Output: a
    self-contained OBJ + UV-keyed projective texture from the source photo.
+   For stable DCC handoff, `--uv-mode canonical` reuses the canonical
+   MediaPipe OBJ `vt` atlas as base UVs and bakes the source portrait into that
+   canonical atlas instead of writing per-photo landmark UVs.
    ~3 seconds end-to-end on a CPU. No GPU, no FLAME/BFM license, no extra installs beyond
    `mediapipe + opencv-python + numpy + matplotlib`.
 
@@ -89,6 +92,12 @@ Explorer. Slug is derived from the filename, outputs go to
 python dg_face_pipeline\run_full_pipeline.py --subject winona
 ```
 
+For stable canonical UV output from the one-shot pipeline:
+
+```powershell
+python dg_face_pipeline\run_full_pipeline.py --subject winona --canonical dg_face_pipeline\canonical_face_model_v002.obj --subdivisions 0 --uv-mode canonical --texture-size 1024
+```
+
 By default, `--subject winona` reads
 `dg_face_pipeline\examples\winona\ref.png`. The older flat
 `examples\winona_ref.png` path is still accepted as a fallback, and you can
@@ -138,6 +147,16 @@ Quad-dominant v002 learned mesh for Maya Catmull-Clark testing:
 python dg_face_pipeline\learned_face_mesh.py --image dg_face_pipeline\examples\winona\ref.png --out dg_face_pipeline\outputs\characters\winona\data\winona_face_mesh.obj --canonical dg_face_pipeline\canonical_face_model_v002.obj --subdivisions 0
 ```
 
+Stable canonical UV atlas + baked albedo:
+```powershell
+python dg_face_pipeline\learned_face_mesh.py --image dg_face_pipeline\examples\winona\ref.png --out dg_face_pipeline\outputs\characters\winona\data\winona_face_mesh.obj --canonical dg_face_pipeline\canonical_face_model.obj --uv-mode canonical --texture-size 1024
+```
+
+Bake or rebake only the canonical texture atlas:
+```powershell
+python dg_face_pipeline\project_canonical_texture.py --photo dg_face_pipeline\examples\winona\ref.png --canonical dg_face_pipeline\canonical_face_model.obj --out dg_face_pipeline\outputs\characters\winona\textures\winona_canonical_albedo.png --size 1024
+```
+
 MakeHuman-modifier path only:
 ```powershell
 python dg_face_pipeline\face_proportion_analyzer.py --image examples\winona_ref.png --out outputs\data\proportions.json
@@ -153,6 +172,8 @@ dg_face_pipeline/
 ├── face_proportion_analyzer.py        <- Step A+B: photo → ratios + pose JSON
 ├── step_c_apply_modifiers.py          <- Step C: ratios → morphed MH OBJ
 ├── learned_face_mesh.py               <- photo → learned dense OBJ + UVs
+├── canonical_uv.py                    <- canonical OBJ v/vt/f parser + base-UV helpers
+├── project_canonical_texture.py       <- photo/runtime UVs → canonical atlas albedo + mask
 ├── export_maya_arnold_scene.py        <- normalized Maya cm OBJ + fallback Arnold .ma
 ├── build_maya_arnold_scene.py         <- Maya 2027 clean scene builder
 ├── export_mediapipe_scaffold.py       <- point-only OBJ/CSV from MediaPipe verts
@@ -160,8 +181,11 @@ dg_face_pipeline/
 ├── render_face.py                     <- 4-panel MH-modifier comparison render
 ├── render_learned_mesh.py             <- 3-panel learned-mesh + projective tex
 ├── generate_texture_maps.py           <- photo → albedo/roughness/normal JPGs (luminance-derived)
+├── texturing_xyz_manifest.py          <- external-only TexturingXYZ inventory JSON writer
 ├── extract_depth_normal.py            <- photo → depth + true normals (Depth Anything v2)
 ├── segment_face_regions.py            <- split learned OBJ into lip/eye/brow/skin groups
+├── validate_face_topology.py          <- OBJ topology validation/reporting utility
+├── bake_maps.py                       <- abstract bake adapter + manifest dry-run report
 ├── face_pipeline.bat                  <- drag-and-drop entry point (auto slug from filename)
 ├── run_full_pipeline.py               <- orchestrator (analysis + renders, no Maya)
 ├── canonical_face_model.obj           <- vendored from google/mediapipe (Apache 2.0)
@@ -183,8 +207,10 @@ dg_face_pipeline/
     ├── architecture.md                <- data flow + design decisions
     ├── cli_reference.md               <- every script flag
     ├── extending.md                   <- swap in MICA / add modifiers / new exporters
+    ├── baking_adapter_contract.md     <- manifest/Maya/Blender bake adapter contract
     ├── maya_handoff.md                <- Maya/Arnold lighting-template workflow
     ├── modifier_mapping.md            <- Loomis ratio ↔ MH modifier reference
+    ├── texturing_xyz_inventory.md     <- external-only TexturingXYZ manifest policy
     ├── pipeline_stages.md             <- what to regenerate and when
     ├── CLAUDE_HANDOFF.md               <- current Maya/v002 state for cold-start handoffs
     └── images/                        <- doc-embedded example frames
@@ -229,8 +255,12 @@ if needed.
 - [docs/cli_reference.md](docs/cli_reference.md) — every flag, every script
 - [docs/extending.md](docs/extending.md) — adding modifiers, swapping
   reconstructor (MICA / PIXEL3DMM / FLAME), wiring back into MakeHuman
+- [docs/baking_adapter_contract.md](docs/baking_adapter_contract.md) — bake
+  manifest schema and Maya/Blender adapter contracts
 - [docs/maya_handoff.md](docs/maya_handoff.md) — Maya/Arnold scene handoff,
   lighting template, and shader map policy
+- [docs/texturing_xyz_inventory.md](docs/texturing_xyz_inventory.md) —
+  external-only TexturingXYZ manifest/inventory workflow
 - [docs/modifier_mapping.md](docs/modifier_mapping.md) — which MH modifier
   each Loomis ratio drives, with rationale
 - [docs/pipeline_stages.md](docs/pipeline_stages.md) — staged regeneration

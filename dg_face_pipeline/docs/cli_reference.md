@@ -16,9 +16,18 @@ the Maya handoff.
 | `--subdivisions` | int | `2` | Mesh-densification passes for the learned mesh. With the default/v002 468-landmark topology: `0` = 468 verts, `1` = 1833, `2` = 7257, `3` = 28881. |
 | `--amplify` | float | `1.5` | Multiplier on MH modifier values. Above ~2.5 begins distorting MH geometry. |
 | `--canonical` | Path | `canonical_face_model.obj` | Canonical topology OBJ for the learned mesh stage. Use v002 with `--subdivisions 0` to preserve quads. |
+| `--uv-mode` | `photo` / `canonical` | `photo` | Passed to `learned_face_mesh.py`; canonical mode writes stable base UVs and bakes an atlas albedo. |
+| `--texture-size` | int | `1024` | Canonical atlas size when `--uv-mode canonical` is used. |
+| `--texture-bleed` | int | `4` | Seam bleed passes for canonical atlas baking. |
 
 ```powershell
 python dg_face_pipeline\run_full_pipeline.py --subject winona
+```
+
+Canonical UV one-shot:
+
+```powershell
+python dg_face_pipeline\run_full_pipeline.py --subject winona --canonical dg_face_pipeline\canonical_face_model_v002.obj --subdivisions 0 --uv-mode canonical --texture-size 1024
 ```
 
 Outputs go under `outputs\characters\<subject>\data\` and
@@ -54,9 +63,42 @@ Photo → MediaPipe-FaceMesh OBJ with UVs, true geometric normals, optional pose
 | `--neutralize-pose` / `--no-neutralize-pose` | flag | on | Undo the photo's yaw + roll via `cv2.solvePnP` so the mesh is Z-forward neutral (production rig orientation). Pitch is **intentionally left alone** because PnP without real camera intrinsics overshoots pitch -- supply real intrinsics to safely include it. |
 | `--write-normals` / `--no-write-normals` | flag | on | Compute true per-vertex geometric normals from the actual mesh topology and emit `vn` lines + `v/vt/vn` face refs. |
 | `--close-boundary` / `--no-close-boundary` | flag | on | Close the open face-mask boundary by extruding the `FACEMESH_FACE_OVAL` ring backward + capping with a triangle fan. **Required** for clean Catmull-Clark subdivision in Maya/Arnold -- open meshes collapse inward with each CC level. With closure: 468 v / 508 f → 505 v / 580 f. |
+| `--uv-mode` | `photo` / `canonical` | `photo` | `photo` preserves the legacy per-photo landmark UVs. `canonical` reorders the canonical OBJ `vt` records into vertex-index space and bakes the portrait into that stable atlas. |
+| `--canonical-texture` | Path | `<out_stem>_canonical_albedo.png` | Output PNG for the baked canonical-atlas albedo when `--uv-mode canonical` is used. |
+| `--canonical-uv-mask` | Path | `<out_stem>_canonical_uv_occupancy.png` | Diagnostic UV occupancy mask for the canonical atlas bake. |
+| `--texture-size` | int | `1024` | Square atlas size in pixels for the canonical bake. |
+| `--texture-bleed` | int | `4` | One-pixel dilation passes to bleed albedo into empty seam pixels after occupancy is recorded. |
 
 When using a quad-dominant canonical topology, keep `--subdivisions 0` so the
 output OBJ preserves quads for Maya/Arnold Catmull-Clark subdivision.
+
+Canonical UV mode keeps vertex, UV, and normal indices aligned in the generated
+OBJ. The helper follows the source canonical OBJ's `f v/vt` records first,
+because the canonical `vt` list is not authored in vertex-index order.
+
+```powershell
+python dg_face_pipeline\learned_face_mesh.py --image dg_face_pipeline\examples\winona\ref.png --out dg_face_pipeline\outputs\characters\winona\data\winona_face_mesh.obj --uv-mode canonical
+```
+
+## project_canonical_texture.py
+Standalone canonical atlas baker. Input is a source photo, runtime landmark UVs
+for that photo, and a canonical OBJ. If `--runtime-uvs` is omitted, the script
+runs MediaPipe FaceMesh on `--photo` and uses those runtime UVs directly.
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `--photo` | Path | `examples/winona_ref.png` | Source portrait to sample. |
+| `--canonical` | Path | `canonical_face_model.obj` | Canonical OBJ whose `vt` records define the destination atlas. Triangle and quad faces are supported. |
+| `--runtime-uvs` | Path | *(MediaPipe from photo)* | Optional JSON, CSV, NPY, or NPZ array of runtime landmark UVs. |
+| `--runtime-uv-convention` | `obj` / `image` | `obj` | `obj` means `v` is bottom-up; `image` means top-down and is flipped on load. |
+| `--out` | Path | `outputs/textures/canonical_albedo.png` | Baked canonical-atlas albedo PNG. |
+| `--mask` | Path | `<out_stem>_occupancy.png` | Diagnostic raw occupancy mask before seam bleed. |
+| `--size` | int | `1024` | Square atlas size in pixels. |
+| `--bleed` | int | `4` | One-pixel dilation passes to bleed color into empty seam pixels. |
+
+```powershell
+python dg_face_pipeline\project_canonical_texture.py --photo dg_face_pipeline\examples\winona\ref.png --canonical dg_face_pipeline\canonical_face_model.obj --out dg_face_pipeline\outputs\characters\winona\textures\winona_canonical_albedo.png --size 1024
+```
 
 ## render_face.py
 4-panel MH comparison render.
@@ -169,6 +211,27 @@ Typical region face counts on a v002 mesh: `skin=468, lips=16, eye=16, brow=8` (
 python dg_face_pipeline\segment_face_regions.py --subject winona_v002
 ```
 
+## validate_face_topology.py
+Dependency-free OBJ topology validator for retopo, bake, and Maya handoff
+checks. It accepts one or more OBJ paths, prints a human-readable report, and
+optionally writes a machine-readable JSON report. Validation issues are reported
+but do not fail the command unless `--strict` is passed.
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `objs` | Path[] | *required* | One or more OBJ files to validate. |
+| `--json-out` | Path | none | Optional JSON report path. |
+| `--strict` | bool | `false` | Exit nonzero when topology issues are present. Parse errors and missing files always exit nonzero. |
+
+Report fields include vertex / UV / normal / face counts, face arity
+distribution, invalid vertex / UV / normal references, degenerate faces,
+boundary and nonmanifold edge counts, connected component count, and bounding
+box min/max.
+
+```powershell
+python dg_face_pipeline\validate_face_topology.py dg_face_pipeline\canonical_face_model_v002.obj --json-out outputs\topology_report.json
+```
+
 ## extract_depth_normal.py
 Monocular depth + Sobel-gradient normal extraction via **Depth Anything v2**
 (Apache-2.0, Hugging Face). Writes raw depth (`.npy`), viewable depth PNG,
@@ -244,6 +307,45 @@ files to reference them.
 python dg_face_pipeline\generate_texture_maps.py --subject jim_varney
 ```
 
+## bake_maps.py
+Abstract texture-baking adapter. In v1, `--backend manifest` is fully
+implemented as a dry-run/report writer; `maya` and `blender` are contract stubs
+that write an adapter report and fail with actionable setup/implementation
+messages.
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `--low` | Path | *required* | Low-resolution retopo mesh that receives baked maps. |
+| `--high` | Path | *required* | High-resolution source mesh used for projection. |
+| `--out-dir` | Path | *required* | Directory for the report and declared map outputs. |
+| `--resolution` | int | `2048` | Square output texture size in pixels. |
+| `--cage-distance` | float | `0.02` | Uniform cage/projection distance in scene units. |
+| `--backend` | str | `manifest` | One of `manifest`, `maya`, or `blender`. |
+| `--maps` | str | `normal, ambient_occlusion, curvature` | Optional repeated or comma-separated requested map names. |
+| `--report` | Path | `<out-dir>/bake_manifest.json` | Optional report JSON override. |
+
+```powershell
+python dg_face_pipeline\bake_maps.py --backend manifest --low outputs\characters\winona\data\winona_retopo.obj --high outputs\characters\winona\data\winona_face_mesh.obj --out-dir outputs\characters\winona\textures --resolution 2048 --cage-distance 0.02
+```
+
+See `docs\baking_adapter_contract.md` for the adapter contract and the planned
+Maya/Blender command shapes.
+
+## texturing_xyz_manifest.py
+External-only TexturingXYZ package inventory. Scans an external source root and
+writes metadata-only JSON under generated outputs by default. It records file
+paths, sizes, suffixes, map type guesses, UDIM tile guesses, color-space hints,
+and `generated_at`; it does not copy source assets.
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `--root` | Path | `B:\RESOURCES\TexturingXYZ\vFace_030` | External TexturingXYZ package root to scan. |
+| `--out` | Path | `outputs/texturing_xyz/vFace_030_manifest.json` | Manifest JSON output path. |
+
+```powershell
+python dg_face_pipeline\texturing_xyz_manifest.py --root B:\RESOURCES\TexturingXYZ\vFace_030 --out dg_face_pipeline\outputs\texturing_xyz\vFace_030_manifest.json
+```
+
 ## Exit codes
 All scripts use the same convention:
 
@@ -252,3 +354,4 @@ All scripts use the same convention:
 | `0` | Success. |
 | `1` | Runtime error during processing (bad OBJ, no face detected, etc.). |
 | `2` | Missing input file. |
+| `3` | Topology validation issues found when `validate_face_topology.py --strict` is used. |

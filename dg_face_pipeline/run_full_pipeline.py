@@ -136,6 +136,9 @@ def run(
     subdivisions: int = 2,
     amplify: float = 1.5,
     canonical_obj: Path = learned.CANONICAL_OBJ,
+    uv_mode: str = learned.UV_MODE_PHOTO,
+    texture_size: int = 1024,
+    texture_bleed: int = 4,
 ) -> Path:
     image = resolve_character_image(subject, image)
     if not image.exists():
@@ -173,6 +176,9 @@ def run(
         learned_obj,
         subdivisions=subdivisions,
         canonical_obj=canonical_obj,
+        uv_mode=uv_mode,
+        texture_size=texture_size,
+        texture_bleed=texture_bleed,
     )
 
     log.info("=" * 72)
@@ -236,13 +242,33 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
             "local quad-dominant topology."
         ),
     )
+    p.add_argument(
+        "--uv-mode",
+        choices=[learned.UV_MODE_PHOTO, learned.UV_MODE_CANONICAL],
+        default=learned.UV_MODE_PHOTO,
+        help=(
+            "'photo' preserves legacy per-photo landmark UVs. 'canonical' "
+            "uses canonical OBJ base UVs and bakes the portrait into that atlas."
+        ),
+    )
+    p.add_argument("--texture-size", type=int, default=1024)
+    p.add_argument("--texture-bleed", type=int, default=4)
     return p.parse_args(argv)
 
 
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        out = run(args.subject, args.image, args.subdivisions, args.amplify, args.canonical)
+        out = run(
+            args.subject,
+            args.image,
+            args.subdivisions,
+            args.amplify,
+            args.canonical,
+            args.uv_mode,
+            args.texture_size,
+            args.texture_bleed,
+        )
         log.info("DONE -- final frame: %s", out)
     except FileNotFoundError as exc:
         log.error("Missing input: %s", exc); return 2
