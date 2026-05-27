@@ -160,6 +160,30 @@ def subdivide_n(
 # -----------------------------------------------------------------------------
 # Pose neutralization + per-vertex normals
 # -----------------------------------------------------------------------------
+def rotate_z_about_centroid(verts: np.ndarray, angle_rad: float) -> np.ndarray:
+    """Rotate vertices in the front-view XY plane around their centroid."""
+    centroid = verts.mean(axis=0)
+    c = np.cos(angle_rad)
+    s = np.sin(angle_rad)
+    rz = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    return (verts - centroid) @ rz.T + centroid
+
+
+def align_front_upright(verts: np.ndarray) -> tuple[np.ndarray, float]:
+    """Force the MediaPipe eye line horizontal in Maya/front-view XY space."""
+    left_eye_outer = 33
+    right_eye_outer = 263
+    if max(left_eye_outer, right_eye_outer) >= len(verts):
+        log.warning("Cannot front-upright align; eye landmarks are not present")
+        return verts, 0.0
+    left = verts[left_eye_outer]
+    right = verts[right_eye_outer]
+    roll_rad = float(np.arctan2(right[1] - left[1], right[0] - left[0]))
+    if abs(roll_rad) < 1e-9:
+        return verts, 0.0
+    return rotate_z_about_centroid(verts, -roll_rad), np.degrees(roll_rad)
+
+
 def neutralize_pose_image_frame(
     raw_xyz: np.ndarray, lms, w: int, h: int,
     neutralize_pitch: bool = False,
@@ -424,6 +448,7 @@ def reconstruct(
     neutralize_pose: bool = True,
     write_normals: bool = True,
     close_boundary: bool = True,
+    front_upright: bool = True,
     uv_mode: str = UV_MODE_PHOTO,
     canonical_texture: Path | None = None,
     canonical_uv_mask: Path | None = None,
@@ -516,6 +541,10 @@ def reconstruct(
         uvs = uvs[:active_vert_count]
         runtime_uvs = runtime_uvs[:active_vert_count]
 
+    if front_upright:
+        verts, removed_roll = align_front_upright(verts)
+        log.info("Front-upright aligned mesh (removed %.2f deg XY eye-line roll)", removed_roll)
+
     if subdivisions > 0:
         if any(len(face) != 3 for face in faces):
             log.warning(
@@ -566,6 +595,7 @@ def reconstruct(
         fh.write(f"# Canonical topology: {canonical_obj}\n")
         fh.write(f"# Image size: {w} x {h}\n")
         fh.write(f"# Pose-neutralized: {bool(neutralize_pose)}\n")
+        fh.write(f"# Front-upright aligned: {bool(front_upright)}\n")
         fh.write(f"# Vertex normals: {bool(write_normals)}\n")
         fh.write(f"# UV mode: {uv_mode}\n")
         fh.write(f"# Verts: {len(verts)}  UVs: {len(uvs)}  Faces: {len(faces)}")
@@ -656,6 +686,17 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--front-upright",
+        dest="front_upright",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "After pose neutralization, rotate the mesh in front-view XY space "
+            "so MediaPipe eye landmarks 33 and 263 are horizontal. This is the "
+            "final Maya-facing orientation guard."
+        ),
+    )
+    parser.add_argument(
         "--close-boundary",
         dest="close_boundary",
         action=argparse.BooleanOptionalAction,
@@ -721,6 +762,7 @@ def main(argv: List[str] | None = None) -> int:
             neutralize_pose=args.neutralize_pose,
             write_normals=args.write_normals,
             close_boundary=args.close_boundary,
+            front_upright=args.front_upright,
             uv_mode=args.uv_mode,
             canonical_texture=args.canonical_texture,
             canonical_uv_mask=args.canonical_uv_mask,
