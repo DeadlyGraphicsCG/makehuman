@@ -12,7 +12,8 @@ canthus per eye).
 
 | Ratio key | Formula | Loomis baseline |
 |-----------|---------|-----------------|
-| `face_width_per_eye` | `eye_l_outer.x − eye_r_outer.x` ÷ W_eye | **5.0** (the canonical "5 eye widths across") |
+| `face_width_per_eye` | `face_l_edge.x − face_r_edge.x` ÷ W_eye | **5.0** (approximate cheek-to-cheek / "5 eye widths across") |
+| `eye_outer_span_per_eye` | `eye_l_outer.x − eye_r_outer.x` ÷ W_eye | **3.0** audit metric (left eye + intereye + right eye) |
 | `face_height_per_eye` | `forehead_top.y − chin.y` ÷ W_eye | **7.0** |
 | `intereye_per_eye` | `eye_l_inner.x − eye_r_inner.x` ÷ W_eye | **1.0** (one eye fits between inner canthi) |
 | `ipd_per_eye` | `iris_l_center → iris_r_center` ÷ W_eye | **2.0** |
@@ -31,6 +32,8 @@ canthus per eye).
 | `eye_l_inner` | 133 |
 | `eye_r_inner` | 362 |
 | `eye_r_outer` | 263 |
+| `face_l_edge` | 234 (approximate cheek edge / soft-tissue zygion) |
+| `face_r_edge` | 454 (approximate cheek edge / soft-tissue zygion) |
 | `iris_l_center` | 468 (requires `refine_landmarks=True`) |
 | `iris_r_center` | 473 |
 | `nose_tip` | 1 |
@@ -56,7 +59,7 @@ negative values and `<target>-<max_keyword>.target` for positive.
 
 | Ratio key | MH modifier path | When subject_ratio < baseline | When subject_ratio > baseline |
 |-----------|------------------|-------------------------------|-------------------------------|
-| `face_width_per_eye` | `head/head-scale-horiz-decr|incr` | `head-scale-horiz-decr.target` (narrower) | `head-scale-horiz-incr.target` (wider) |
+| `face_width_per_eye` | `head/head-scale-horiz-decr|incr` | `head-scale-horiz-decr.target` (narrower cheek-to-cheek) | `head-scale-horiz-incr.target` (wider cheek-to-cheek) |
 | `face_height_per_eye` | `head/head-scale-vert-decr|incr` | shorter face | taller face |
 | `nose_width_per_eye` | `nose/nose-scale-horiz-decr|incr` | narrower nose | wider nose |
 | `mouth_width_per_eye` | `mouth/mouth-scale-horiz-decr|incr` | narrower mouth | wider mouth |

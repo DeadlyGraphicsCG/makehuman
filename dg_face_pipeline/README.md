@@ -20,8 +20,15 @@ parallel back-ends:
 The two back-ends run side-by-side in `run_full_pipeline.py` and produce a
 stacked comparison frame so you can see them together.
 
+The analyzer also emits a **canonical proportionality report**: classical
+thirds/fifths are used as a measurement scaffold, then the subject's deltas
+are charted. This is not a beauty score; it is the identity-offset map we can
+later turn into MakeHuman `.target` sculpt data.
+
 ```
 photo --> [analyzer] --> proportions JSON --> [step C] --> morphed MH OBJ
+                              |
+                              +----------> [render_canonical_report] --> canon PNG
                               |
                               +----------> [learned_face_mesh] --> dense OBJ + UVs
                               |
@@ -63,18 +70,43 @@ python -m pip install mediapipe==0.10.18 opencv-python==4.10.0.84 numpy==1.26.4 
 
 ### Run the full pipeline
 ```powershell
-python dg_face_pipeline\run_full_pipeline.py `
-    --image dg_face_pipeline\examples\winona_ref.png `
-    --subject winona
+python dg_face_pipeline\run_full_pipeline.py --subject winona
 ```
 
+By default, `--subject winona` reads
+`dg_face_pipeline\examples\winona\ref.png`. The older flat
+`examples\winona_ref.png` path is still accepted as a fallback, and you can
+override with `--image <path>`.
+
 Outputs land at:
-- `dg_face_pipeline\outputs\data\winona_face_proportions.json`
-- `dg_face_pipeline\outputs\data\winona_morphed.obj`        (MH-modifier path)
-- `dg_face_pipeline\outputs\data\winona_face_mesh.obj`      (learned, with UVs)
-- `dg_face_pipeline\outputs\renders\winona_mh_compare.png`
-- `dg_face_pipeline\outputs\renders\winona_learned_mesh.png`
-- `dg_face_pipeline\outputs\renders\winona_full_pipeline.png`  ← combined
+- `dg_face_pipeline\outputs\characters\winona\data\winona_face_proportions.json`
+- `dg_face_pipeline\outputs\characters\winona\data\winona_morphed.obj`        (MH-modifier path)
+- `dg_face_pipeline\outputs\characters\winona\data\winona_face_mesh.obj`      (learned, with UVs)
+- `dg_face_pipeline\outputs\characters\winona\renders\winona_canon_report.png`
+- `dg_face_pipeline\outputs\characters\winona\renders\winona_mh_compare.png`
+- `dg_face_pipeline\outputs\characters\winona\renders\winona_learned_mesh.png`
+- `dg_face_pipeline\outputs\characters\winona\renders\winona_full_pipeline.png`  <- combined
+
+### Export the Maya / Arnold handoff
+```powershell
+python dg_face_pipeline\export_maya_arnold_scene.py --subject winona --height-cm 22 --arnold-subdiv-type catclark --layout three --front-rotate-y -24
+mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject winona --arnold-subdiv-type catclark --arnold-subdiv-iterations 2
+```
+
+This stage is separate from analysis and mesh generation. It writes a
+Maya-centimeter OBJ plus a fallback Maya ASCII Arnold loader scene under
+`outputs\characters\<subject>\maya\`. The `mayapy` command then opens the local
+lighting template, imports the normalized OBJ, creates a clean Arnold skin
+shader network, lays out the three comparison meshes, applies Arnold
+Catmull-Clark subdivision, and saves
+`<subject>_arnold_skin_clean.ma`. Rerun only these Maya stages when shader,
+lighting, camera, smoothing, or scale settings change.
+
+If a terminal does not yet see `mayapy`, call Maya 2027 directly:
+
+```powershell
+& "C:\Program Files\Autodesk\Maya2027\bin\mayapy.exe" dg_face_pipeline\build_maya_arnold_scene.py --subject winona
+```
 
 ### Run only one back-end
 
@@ -99,13 +131,19 @@ dg_face_pipeline/
 ├── face_proportion_analyzer.py        <- Step A+B: photo → ratios + pose JSON
 ├── step_c_apply_modifiers.py          <- Step C: ratios → morphed MH OBJ
 ├── learned_face_mesh.py               <- photo → learned dense OBJ + UVs
+├── export_maya_arnold_scene.py        <- normalized Maya cm OBJ + fallback Arnold .ma
+├── build_maya_arnold_scene.py         <- Maya 2027 clean scene builder
+├── export_mediapipe_scaffold.py       <- point-only OBJ/CSV from MediaPipe verts
+├── render_canonical_report.py         <- thirds/fifths overlay + delta chart
 ├── render_face.py                     <- 4-panel MH-modifier comparison render
 ├── render_learned_mesh.py             <- 3-panel learned-mesh + projective tex
 ├── run_full_pipeline.py               <- orchestrator (runs all five)
 ├── canonical_face_model.obj           <- vendored from google/mediapipe (Apache 2.0)
 ├── examples/                          <- committed input portraits
-│   ├── winona_ref.png
-│   └── subject_b_ref.png
+│   ├── winona/ref.png
+│   ├── subject_b/ref.png
+│   ├── winona_ref.png                 <- legacy fallback
+│   └── subject_b_ref.png              <- legacy fallback
 ├── outputs/                           <- generated artifacts (gitignored)
 │   ├── data/                          <-   JSON + OBJ
 │   └── renders/                       <-   PNG comparison frames
@@ -113,7 +151,9 @@ dg_face_pipeline/
     ├── architecture.md                <- data flow + design decisions
     ├── cli_reference.md               <- every script flag
     ├── extending.md                   <- swap in MICA / add modifiers / new exporters
+    ├── maya_handoff.md                <- Maya/Arnold lighting-template workflow
     ├── modifier_mapping.md            <- Loomis ratio ↔ MH modifier reference
+    ├── pipeline_stages.md             <- what to regenerate and when
     └── images/                        <- doc-embedded example frames
 ```
 
@@ -154,5 +194,9 @@ if needed.
 - [docs/cli_reference.md](docs/cli_reference.md) — every flag, every script
 - [docs/extending.md](docs/extending.md) — adding modifiers, swapping
   reconstructor (MICA / PIXEL3DMM / FLAME), wiring back into MakeHuman
+- [docs/maya_handoff.md](docs/maya_handoff.md) — Maya/Arnold scene handoff,
+  lighting template, and shader map policy
 - [docs/modifier_mapping.md](docs/modifier_mapping.md) — which MH modifier
   each Loomis ratio drives, with rationale
+- [docs/pipeline_stages.md](docs/pipeline_stages.md) — staged regeneration
+  rules for analyze / mesh / render / Maya exports

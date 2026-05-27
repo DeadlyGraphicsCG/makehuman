@@ -32,7 +32,12 @@ dg_face_pipeline/outputs/
 
 # ...but committed example inputs and embedded doc images survive *.png
 !dg_face_pipeline/examples/*.png
+!dg_face_pipeline/examples/**/
+!dg_face_pipeline/examples/**/*.png
+dg_face_pipeline/examples/**/.mayaSwatches/
+dg_face_pipeline/examples/**/*.tx
 !dg_face_pipeline/docs/images/*.png
+**/.mayaSwatches/
 *.thumb
 *.mhclo
 *.mhmat

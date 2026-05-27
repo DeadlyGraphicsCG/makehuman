@@ -63,6 +63,8 @@ LM = {
     "eye_l_inner": 133,
     "eye_r_inner": 362,
     "eye_r_outer": 263,
+    "face_l_edge": 234,     # approximate soft-tissue zygion / cheek edge
+    "face_r_edge": 454,
     "iris_l_center": 468,   # refine_landmarks=True
     "iris_r_center": 473,
     "nose_tip": 1,
@@ -140,6 +142,7 @@ class FaceLandmarks:
     """Aligned 2D landmarks in face-local coordinates (eye-line == x-axis)."""
 
     points: Dict[str, np.ndarray] = field(default_factory=dict)
+    points_px: Dict[str, np.ndarray] = field(default_factory=dict)
     image_size: Tuple[int, int] = (0, 0)
     roll_rad: float = 0.0
     bbox_px: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
@@ -208,7 +211,9 @@ class ProportionReport:
     subject_ratios: Dict[str, float]
     baseline_ratios: Dict[str, float]
     delta_ratios: Dict[str, float]
+    canonical_analysis: Dict[str, object]
     modifier_targets: List[Dict[str, float]]
+    landmarks_px: Dict[str, List[float]]
     eye_width_px: float
     notes: str
 
@@ -276,6 +281,7 @@ def extract_landmarks(image_path: Path) -> FaceLandmarks:
 
     return FaceLandmarks(
         points=aligned,
+        points_px=pts_px,
         image_size=(w, h),
         roll_rad=roll,
         bbox_px=bbox,
@@ -312,7 +318,11 @@ def compute_ratios(face: FaceLandmarks) -> Tuple[Dict[str, float], float]:
         ipd = float(np.linalg.norm(eye_l_mid - eye_r_mid))
 
     ratios: Dict[str, float] = {
-        "face_width_per_eye":       _abs_x("eye_l_outer", "eye_r_outer") / w_eye,
+        # Rule-of-fifths face width is cheek-to-cheek / bizygomatic width, not
+        # outer-canthus-to-outer-canthus. MediaPipe has no true zygion, so
+        # face_l_edge / face_r_edge are a practical soft-tissue approximation.
+        "face_width_per_eye":       _abs_x("face_l_edge", "face_r_edge") / w_eye,
+        "eye_outer_span_per_eye":   _abs_x("eye_l_outer", "eye_r_outer") / w_eye,
         "intereye_per_eye":         _abs_x("eye_l_inner", "eye_r_inner") / w_eye,
         "nose_width_per_eye":       _abs_x("nose_wing_l", "nose_wing_r") / w_eye,
         "mouth_width_per_eye":      _abs_x("mouth_corner_l", "mouth_corner_r") / w_eye,
@@ -324,6 +334,160 @@ def compute_ratios(face: FaceLandmarks) -> Tuple[Dict[str, float], float]:
         "ipd_per_eye":              ipd / w_eye,
     }
     return ratios, w_eye
+
+
+# -----------------------------------------------------------------------------
+# Canon report: "how far from the rule-grid is this face?"
+# -----------------------------------------------------------------------------
+def _metric(actual: float, ideal: float, lower_word: str, upper_word: str) -> Dict[str, object]:
+    delta = actual - ideal
+    delta_pct = (delta / ideal * 100.0) if ideal else 0.0
+    if abs(delta_pct) < 3.0:
+        meaning = "near canon"
+    elif delta_pct < 0:
+        meaning = lower_word
+    else:
+        meaning = upper_word
+    return {
+        "actual": round(float(actual), 4),
+        "ideal": round(float(ideal), 4),
+        "delta": round(float(delta), 4),
+        "delta_pct": round(float(delta_pct), 2),
+        "meaning": meaning,
+    }
+
+
+def build_canonical_analysis(
+    face: FaceLandmarks,
+    subject_ratios: Dict[str, float],
+) -> Dict[str, object]:
+    """Return a descriptive canon-delta table for fifths, thirds, and features."""
+    p = face.points
+
+    def x(name: str) -> float:
+        return float(p[name][0])
+
+    def y(name: str) -> float:
+        return float(p[name][1])
+
+    w_eye_l = abs(x("eye_l_inner") - x("eye_l_outer"))
+    w_eye_r = abs(x("eye_r_outer") - x("eye_r_inner"))
+    w_eye = max((w_eye_l + w_eye_r) / 2.0, 1e-6)
+
+    face_min = min(x("face_l_edge"), x("face_r_edge"))
+    face_max = max(x("face_l_edge"), x("face_r_edge"))
+    eye_outer_min = min(x("eye_l_outer"), x("eye_r_outer"))
+    eye_outer_max = max(x("eye_l_outer"), x("eye_r_outer"))
+
+    fifth_segments = {
+        "left_outer_fifth": (eye_outer_min - face_min) / w_eye,
+        "left_eye": w_eye_l / w_eye,
+        "intereye": subject_ratios["intereye_per_eye"],
+        "right_eye": w_eye_r / w_eye,
+        "right_outer_fifth": (face_max - eye_outer_max) / w_eye,
+    }
+
+    upper = abs(y("forehead_top") - y("brow_center"))
+    middle = abs(y("brow_center") - y("nose_bottom"))
+    lower = abs(y("nose_bottom") - y("chin"))
+    thirds_total = max(upper + middle + lower, 1e-6)
+    ideal_third = thirds_total / 3.0
+
+    lower_upper_lip = abs(y("nose_bottom") - y("mouth_upper"))
+    lower_remainder = abs(y("mouth_upper") - y("chin"))
+    lower_total = max(lower_upper_lip + lower_remainder, 1e-6)
+
+    nose_width = subject_ratios["nose_width_per_eye"]
+    mouth_width = subject_ratios["mouth_width_per_eye"]
+
+    identity_deltas = {
+        "face_width_per_eye": _metric(
+            subject_ratios["face_width_per_eye"], 5.0,
+            "narrower cheek-to-cheek than fifths canon",
+            "wider cheek-to-cheek than fifths canon",
+        ),
+        "eye_outer_span_per_eye": _metric(
+            subject_ratios["eye_outer_span_per_eye"], 3.0,
+            "narrower eye span than five-part canon",
+            "wider eye span than five-part canon",
+        ),
+        "intereye_per_eye": _metric(
+            subject_ratios["intereye_per_eye"], 1.0,
+            "closer-set eyes",
+            "wider-set eyes",
+        ),
+        "nose_width_per_eye": _metric(
+            nose_width, 1.0,
+            "narrower nose base",
+            "wider nose base",
+        ),
+        "mouth_width_per_eye": _metric(
+            mouth_width, 1.5,
+            "narrower mouth",
+            "wider mouth",
+        ),
+        "mouth_width_per_nose": _metric(
+            mouth_width / max(nose_width, 1e-6), 1.5,
+            "mouth narrow relative to nose",
+            "mouth wide relative to nose",
+        ),
+        "upper_third_share": _metric(
+            upper / thirds_total, 1.0 / 3.0,
+            "shorter upper third",
+            "longer upper third",
+        ),
+        "middle_third_share": _metric(
+            middle / thirds_total, 1.0 / 3.0,
+            "shorter middle third",
+            "longer middle third",
+        ),
+        "lower_third_share": _metric(
+            lower / thirds_total, 1.0 / 3.0,
+            "shorter lower third",
+            "longer lower third",
+        ),
+        "lower_third_upper_lip_share": _metric(
+            lower_upper_lip / lower_total, 1.0 / 3.0,
+            "shorter upper-lip segment",
+            "longer upper-lip segment",
+        ),
+    }
+
+    return {
+        "notes": (
+            "Classical fifths/thirds are used as a measurement scaffold. "
+            "face_width_per_eye now uses approximate cheek-edge FaceMesh "
+            "landmarks, not outer eye corners."
+        ),
+        "horizontal_fifths": {
+            "segments_per_eye": {k: round(float(v), 4) for k, v in fifth_segments.items()},
+            "ideal_each_segment_per_eye": 1.0,
+            "face_width_per_eye": identity_deltas["face_width_per_eye"],
+        },
+        "vertical_thirds": {
+            "segments_px": {
+                "upper_hairline_to_brow": round(float(upper), 3),
+                "middle_brow_to_nose": round(float(middle), 3),
+                "lower_nose_to_chin": round(float(lower), 3),
+                "ideal_each": round(float(ideal_third), 3),
+            },
+            "upper_third_share": identity_deltas["upper_third_share"],
+            "middle_third_share": identity_deltas["middle_third_share"],
+            "lower_third_share": identity_deltas["lower_third_share"],
+        },
+        "feature_widths": {
+            "intereye_per_eye": identity_deltas["intereye_per_eye"],
+            "nose_width_per_eye": identity_deltas["nose_width_per_eye"],
+            "mouth_width_per_eye": identity_deltas["mouth_width_per_eye"],
+            "mouth_width_per_nose": identity_deltas["mouth_width_per_nose"],
+        },
+        "lower_third_subdivision": {
+            "upper_lip_share": identity_deltas["lower_third_upper_lip_share"],
+            "ideal_upper_lip_share": round(1.0 / 3.0, 4),
+            "ideal_lower_lip_chin_share": round(2.0 / 3.0, 4),
+        },
+        "identity_deltas": identity_deltas,
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -370,10 +534,15 @@ def analyze(image_path: Path, out_path: Path) -> ProportionReport:
     log.info("Step B : computing dimensionless ratios (W_eye = 1.0)")
     subject_ratios, eye_width_px = compute_ratios(face)
     for k, v in subject_ratios.items():
-        log.info("  %-28s = %.3f W_eye  (baseline %.3f)", k, v, LOOMIS_BASELINE[k])
+        base = LOOMIS_BASELINE.get(k)
+        if base is None:
+            log.info("  %-28s = %.3f W_eye  (audit metric)", k, v)
+        else:
+            log.info("  %-28s = %.3f W_eye  (baseline %.3f)", k, v, base)
 
     log.info("Step C : building MakeHuman modifier delta payload")
     delta_ratios, mh_targets = build_modifier_targets(subject_ratios, LOOMIS_BASELINE)
+    canonical_analysis = build_canonical_analysis(face, subject_ratios)
 
     report = ProportionReport(
         image=str(image_path),
@@ -383,7 +552,12 @@ def analyze(image_path: Path, out_path: Path) -> ProportionReport:
         subject_ratios={k: round(v, 4) for k, v in subject_ratios.items()},
         baseline_ratios=LOOMIS_BASELINE,
         delta_ratios=delta_ratios,
+        canonical_analysis=canonical_analysis,
         modifier_targets=mh_targets,
+        landmarks_px={
+            k: [round(float(v[0]), 3), round(float(v[1]), 3)]
+            for k, v in face.points_px.items()
+        },
         eye_width_px=round(eye_width_px, 3),
         notes=(
             "Ratios dimensionless; W_eye = 1.0 base unit (Loomis/O'Reilly). "

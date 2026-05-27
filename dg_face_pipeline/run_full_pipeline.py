@@ -9,17 +9,18 @@ Runs the full pipeline for a single portrait photo:
   1. face_proportion_analyzer    -- landmarks -> Loomis ratios + bbox + pose
   2. step_c_apply_modifiers      -- ratios -> morphed MH base.obj
   3. learned_face_mesh           -- photo -> dense subdivided face OBJ + UVs
-  4. render_face                  -- 4-panel MH comparison render
-  5. render_learned_mesh          -- 3-panel learned-mesh + photo-texture
-  6. assemble final combined PNG  -- stacks both renders vertically
+  4. render_canonical_report      -- thirds/fifths canon overlay + deltas
+  5. render_face                  -- 4-panel MH comparison render
+  6. render_learned_mesh          -- 3-panel learned-mesh + photo-texture
+  7. assemble final combined PNG  -- stacks all renders vertically
 
 Run:
     python C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\run_full_pipeline.py ^
-        --image C:\\AI\\apps\\DG_Brain\\assets\\refs\\winona_ref.png ^
         --subject winona
 
-Outputs go under C:\\AI\\apps\\DG_Brain\\data\\ as <subject>_*.{json,obj,png}
-and a final combined frame at data\\renders\\<subject>_full_pipeline.png.
+By default the image is resolved from examples\\<subject>\\ref.png, falling
+back to examples\\<subject>_ref.png for older layouts. Outputs go under
+outputs\\characters\\<subject>\\.
 """
 from __future__ import annotations
 
@@ -43,6 +44,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import face_proportion_analyzer as analyzer  # noqa: E402
 import learned_face_mesh as learned          # noqa: E402
+import render_canonical_report as render_canon  # noqa: E402
 import render_face as render_mh              # noqa: E402
 import render_learned_mesh as render_learned  # noqa: E402
 import step_c_apply_modifiers as step_c       # noqa: E402
@@ -56,28 +58,49 @@ log = logging.getLogger("run_full_pipeline")
 PIPELINE_DIR = SCRIPT_DIR  # alias for readability
 EXAMPLES_DIR = PIPELINE_DIR / "examples"
 OUTPUTS_DIR = PIPELINE_DIR / "outputs"
-DATA_ROOT = OUTPUTS_DIR / "data"
-RENDERS_ROOT = OUTPUTS_DIR / "renders"
+CHARACTERS_ROOT = OUTPUTS_DIR / "characters"
 MH_ROOT = PIPELINE_DIR.parent / "makehuman"
 
 
 # -----------------------------------------------------------------------------
-# Final compositor: stacks the MH 4-panel above the learned-mesh 3-panel.
+# Path helpers
 # -----------------------------------------------------------------------------
-def stack_renders(mh_png: Path, learned_png: Path, out_png: Path) -> Path:
-    a = mpimg.imread(str(mh_png))
-    b = mpimg.imread(str(learned_png))
+def resolve_character_image(subject: str, image: Path | None = None) -> Path:
+    if image is not None:
+        return image
+    candidates = [
+        EXAMPLES_DIR / subject / "ref.png",
+        EXAMPLES_DIR / subject / f"{subject}_ref.png",
+        EXAMPLES_DIR / f"{subject}_ref.png",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def character_paths(subject: str) -> tuple[Path, Path]:
+    root = CHARACTERS_ROOT / subject
+    return root / "data", root / "renders"
+
+
+# -----------------------------------------------------------------------------
+# Final compositor: stacks all comparison renders vertically.
+# -----------------------------------------------------------------------------
+def stack_renders(render_pngs: List[Path], out_png: Path) -> Path:
+    images = [mpimg.imread(str(p)) for p in render_pngs]
     # Match widths by padding the narrower one with the background colour.
     bg = (0.082, 0.082, 0.102)  # #15151a, the panel facecolor used elsewhere
-    target_w = max(a.shape[1], b.shape[1])
+    target_w = max(img.shape[1] for img in images)
 
     def pad_to(img, w):
         if img.shape[1] == w:
+            if img.shape[-1] == 4:
+                return img[..., :3]
             return img
-        pad = ((0, 0), (0, w - img.shape[1]), (0, 0))
-        # alpha-strip if present
         if img.shape[-1] == 4:
             img = img[..., :3]
+        pad = ((0, 0), (0, w - img.shape[1]), (0, 0))
         import numpy as np
         out = np.pad(img, pad, mode="constant", constant_values=0.0)
         # Recolour the pad columns to bg
@@ -87,9 +110,7 @@ def stack_renders(mh_png: Path, learned_png: Path, out_png: Path) -> Path:
         return out
 
     import numpy as np
-    a3 = pad_to(a if a.shape[-1] != 4 else a[..., :3], target_w)
-    b3 = pad_to(b if b.shape[-1] != 4 else b[..., :3], target_w)
-    combined = np.concatenate([a3, b3], axis=0)
+    combined = np.concatenate([pad_to(img, target_w) for img in images], axis=0)
 
     fig = plt.figure(figsize=(combined.shape[1] / 140.0, combined.shape[0] / 140.0),
                      facecolor="#15151a")
@@ -110,28 +131,31 @@ def stack_renders(mh_png: Path, learned_png: Path, out_png: Path) -> Path:
 # Pipeline
 # -----------------------------------------------------------------------------
 def run(
-    image: Path,
     subject: str,
+    image: Path | None = None,
     subdivisions: int = 2,
     amplify: float = 1.5,
 ) -> Path:
+    image = resolve_character_image(subject, image)
     if not image.exists():
         raise FileNotFoundError(f"Image not found: {image}")
 
-    proportions_json = DATA_ROOT / f"{subject}_face_proportions.json"
-    morphed_obj = DATA_ROOT / f"{subject}_morphed.obj"
-    learned_obj = DATA_ROOT / f"{subject}_face_mesh.obj"
-    mh_render_png = RENDERS_ROOT / f"{subject}_mh_compare.png"
-    learned_render_png = RENDERS_ROOT / f"{subject}_learned_mesh.png"
-    final_png = RENDERS_ROOT / f"{subject}_full_pipeline.png"
+    data_root, renders_root = character_paths(subject)
+    proportions_json = data_root / f"{subject}_face_proportions.json"
+    morphed_obj = data_root / f"{subject}_morphed.obj"
+    learned_obj = data_root / f"{subject}_face_mesh.obj"
+    canon_render_png = renders_root / f"{subject}_canon_report.png"
+    mh_render_png = renders_root / f"{subject}_mh_compare.png"
+    learned_render_png = renders_root / f"{subject}_learned_mesh.png"
+    final_png = renders_root / f"{subject}_full_pipeline.png"
 
     log.info("=" * 72)
-    log.info("STEP 1/5 : analyzer -- %s", image.name)
+    log.info("STEP 1/6 : analyzer -- %s", image)
     log.info("=" * 72)
     analyzer.analyze(image, proportions_json)
 
     log.info("=" * 72)
-    log.info("STEP 2/5 : step_c MH modifier apply (amplify=%.2f)", amplify)
+    log.info("STEP 2/6 : step_c MH modifier apply (amplify=%.2f)", amplify)
     log.info("=" * 72)
     step_c.apply_proportions(
         proportions_json=proportions_json,
@@ -141,12 +165,21 @@ def run(
     )
 
     log.info("=" * 72)
-    log.info("STEP 3/5 : learned face mesh (subdivisions=%d)", subdivisions)
+    log.info("STEP 3/6 : learned face mesh (subdivisions=%d)", subdivisions)
     log.info("=" * 72)
     learned.reconstruct(image, learned_obj, subdivisions=subdivisions)
 
     log.info("=" * 72)
-    log.info("STEP 4/5 : render MH 4-panel comparison")
+    log.info("STEP 4/6 : render canon proportionality report")
+    log.info("=" * 72)
+    render_canon.render(
+        photo=image,
+        proportions=proportions_json,
+        out_png=canon_render_png,
+    )
+
+    log.info("=" * 72)
+    log.info("STEP 5/6 : render MH 4-panel comparison")
     log.info("=" * 72)
     render_mh.render_compare(
         baseline_obj=MH_ROOT / "data" / "3dobjs" / "base.obj",
@@ -157,7 +190,7 @@ def run(
     )
 
     log.info("=" * 72)
-    log.info("STEP 5/5 : render learned-mesh 3-panel")
+    log.info("STEP 6/6 : render learned-mesh 3-panel")
     log.info("=" * 72)
     render_learned.render(
         photo=image,
@@ -169,16 +202,21 @@ def run(
     log.info("=" * 72)
     log.info("FINAL    : stacking combined frame")
     log.info("=" * 72)
-    stack_renders(mh_render_png, learned_render_png, final_png)
+    stack_renders([canon_render_png, mh_render_png, learned_render_png], final_png)
     return final_png
 
 
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run the full Photo -> face pipeline.")
-    p.add_argument("--image", type=Path, required=True)
     p.add_argument(
         "--subject", type=str, required=True,
         help="Short name used to derive output file names (e.g. 'winona').",
+    )
+    p.add_argument(
+        "--image",
+        type=Path,
+        default=None,
+        help="Optional image override. Defaults to examples/<subject>/ref.png.",
     )
     p.add_argument("--subdivisions", type=int, default=2)
     p.add_argument("--amplify", type=float, default=1.5)
@@ -188,7 +226,7 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        out = run(args.image, args.subject, args.subdivisions, args.amplify)
+        out = run(args.subject, args.image, args.subdivisions, args.amplify)
         log.info("DONE -- final frame: %s", out)
     except FileNotFoundError as exc:
         log.error("Missing input: %s", exc); return 2
