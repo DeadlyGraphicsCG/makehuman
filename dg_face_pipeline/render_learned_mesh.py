@@ -55,6 +55,7 @@ AMBIENT = 0.30
 
 
 VT_RE = re.compile(r"^vt\s+")
+MTLLIB_RE = re.compile(r"^mtllib\s+")
 
 
 def load_obj_with_uvs(
@@ -107,6 +108,29 @@ def load_obj_with_uvs(
         obj_path.name, len(v), len(uv), len(tv),
     )
     return v, uv, tv, tu
+
+
+def resolve_obj_texture(obj_path: Path) -> Path | None:
+    """Return the first map_Kd texture referenced by the OBJ's MTL, if any."""
+    mtllibs: list[str] = []
+    with obj_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if MTLLIB_RE.match(line):
+                mtllibs.append(line.split(maxsplit=1)[1])
+    for mtl_name in mtllibs:
+        mtl_path = obj_path.parent / mtl_name
+        if not mtl_path.exists():
+            continue
+        with mtl_path.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if line.lower().startswith("map_kd "):
+                    tex = line.split(maxsplit=1)[1]
+                    texture = (mtl_path.parent / tex).resolve()
+                    if texture.exists():
+                        return texture
+    return None
 
 
 def load_obj_simple(obj_path: Path) -> Tuple[np.ndarray, np.ndarray]:
@@ -237,19 +261,31 @@ def render(
             photo.name, photo_rgb.shape[1], photo_rgb.shape[0],
         )
 
-    has_texture = (photo_rgb is not None and len(uvs) > 0)
+    texture_path = resolve_obj_texture(mesh)
+    texture_rgb = None
+    if texture_path is not None:
+        texture_rgb = mpimg.imread(str(texture_path))
+        log.info(
+            "Loaded mesh texture from MTL: %s (%dx%d)",
+            texture_path.name, texture_rgb.shape[1], texture_rgb.shape[0],
+        )
+    elif photo_rgb is not None:
+        texture_rgb = photo_rgb
+        log.info("No MTL texture found; using source photo as projective texture")
+
+    has_texture = (texture_rgb is not None and len(uvs) > 0)
     suffix = " (photo-textured)" if has_texture else " (flat-shaded)"
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 6), facecolor="#15151a")
     draw_photo(axes[0], photo, proportions)
     draw_mesh(
         axes[1], verts, tri_v, "Reconstructed mesh -- frontal" + suffix,
-        uvs=uvs, tri_uv=tri_uv, photo_rgb=photo_rgb,
+        uvs=uvs, tri_uv=tri_uv, photo_rgb=texture_rgb,
     )
     draw_mesh(
         axes[2], rotate_y(verts, 25.0), tri_v,
         "Reconstructed mesh -- 3/4 view (yaw +25 deg)" + suffix,
-        uvs=uvs, tri_uv=tri_uv, photo_rgb=photo_rgb,
+        uvs=uvs, tri_uv=tri_uv, photo_rgb=texture_rgb,
     )
     fig.suptitle(
         "Photo -> learned face mesh (MediaPipe FaceMesh, 478 verts)"
