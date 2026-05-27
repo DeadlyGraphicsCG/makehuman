@@ -170,18 +170,37 @@ def rotate_z_about_centroid(verts: np.ndarray, angle_rad: float) -> np.ndarray:
 
 
 def align_front_upright(verts: np.ndarray) -> tuple[np.ndarray, float]:
-    """Force the MediaPipe eye line horizontal in Maya/front-view XY space."""
-    left_eye_outer = 33
-    right_eye_outer = 263
-    if max(left_eye_outer, right_eye_outer) >= len(verts):
-        log.warning("Cannot front-upright align; eye landmarks are not present")
+    """Force the face upright in Maya/front-view XY space."""
+    landmark_sets = [
+        (33, 263, 1.0, 0.0),          # outer eyes: horizontal
+        (133, 362, 1.0, 0.0),         # inner eyes: horizontal
+        (1, 152, 1.5, np.pi * 0.5),   # nose tip -> chin: vertical
+        (10, 152, 1.0, np.pi * 0.5),  # forehead -> chin: vertical
+    ]
+    if any(max(a, b) >= len(verts) for a, b, _weight, _target in landmark_sets):
+        log.warning("Cannot front-upright align; required face landmarks are not present")
         return verts, 0.0
-    left = verts[left_eye_outer]
-    right = verts[right_eye_outer]
-    roll_rad = float(np.arctan2(right[1] - left[1], right[0] - left[0]))
+    weighted_sin = 0.0
+    weighted_cos = 0.0
+    for a, b, weight, target_offset in landmark_sets:
+        va = verts[a]
+        vb = verts[b]
+        angle = float(np.arctan2(vb[1] - va[1], vb[0] - va[0]))
+        roll_estimate = angle + float(target_offset)
+        weighted_sin += weight * float(np.sin(roll_estimate))
+        weighted_cos += weight * float(np.cos(roll_estimate))
+    roll_rad = float(np.arctan2(weighted_sin, weighted_cos))
     if abs(roll_rad) < 1e-9:
         return verts, 0.0
     return rotate_z_about_centroid(verts, -roll_rad), np.degrees(roll_rad)
+
+
+def center_bbox_at_origin(verts: np.ndarray) -> np.ndarray:
+    """Center the mesh bounding box at world origin for DCC import."""
+    bbox_min = verts.min(axis=0)
+    bbox_max = verts.max(axis=0)
+    bbox_center = (bbox_min + bbox_max) * 0.5
+    return verts - bbox_center
 
 
 def neutralize_pose_image_frame(
@@ -449,6 +468,7 @@ def reconstruct(
     write_normals: bool = True,
     close_boundary: bool = True,
     front_upright: bool = True,
+    center_origin: bool = True,
     uv_mode: str = UV_MODE_PHOTO,
     canonical_texture: Path | None = None,
     canonical_uv_mask: Path | None = None,
@@ -543,7 +563,7 @@ def reconstruct(
 
     if front_upright:
         verts, removed_roll = align_front_upright(verts)
-        log.info("Front-upright aligned mesh (removed %.2f deg XY eye-line roll)", removed_roll)
+        log.info("Front-upright aligned mesh (removed %.2f deg XY face roll)", removed_roll)
 
     if subdivisions > 0:
         if any(len(face) != 3 for face in faces):
@@ -562,6 +582,10 @@ def reconstruct(
     # downstream Catmull-Clark subdivision in Maya without boundary collapse.
     if close_boundary:
         verts, faces, uvs = close_face_boundary(verts, faces, uvs)
+
+    if center_origin:
+        verts = center_bbox_at_origin(verts)
+        log.info("Centered final mesh bounding box at origin")
 
     # Compute true geometric per-vertex normals from the actual mesh topology.
     # Vertex index == UV index == normal index, so face refs become v/vt/vn
@@ -596,6 +620,7 @@ def reconstruct(
         fh.write(f"# Image size: {w} x {h}\n")
         fh.write(f"# Pose-neutralized: {bool(neutralize_pose)}\n")
         fh.write(f"# Front-upright aligned: {bool(front_upright)}\n")
+        fh.write(f"# Centered at origin: {bool(center_origin)}\n")
         fh.write(f"# Vertex normals: {bool(write_normals)}\n")
         fh.write(f"# UV mode: {uv_mode}\n")
         fh.write(f"# Verts: {len(verts)}  UVs: {len(uvs)}  Faces: {len(faces)}")
@@ -697,6 +722,13 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--center-origin",
+        dest="center_origin",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Center the generated mesh bounding box at world origin for DCC import.",
+    )
+    parser.add_argument(
         "--close-boundary",
         dest="close_boundary",
         action=argparse.BooleanOptionalAction,
@@ -763,6 +795,7 @@ def main(argv: List[str] | None = None) -> int:
             write_normals=args.write_normals,
             close_boundary=args.close_boundary,
             front_upright=args.front_upright,
+            center_origin=args.center_origin,
             uv_mode=args.uv_mode,
             canonical_texture=args.canonical_texture,
             canonical_uv_mask=args.canonical_uv_mask,
