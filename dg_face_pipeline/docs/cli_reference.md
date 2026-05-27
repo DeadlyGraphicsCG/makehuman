@@ -144,7 +144,7 @@ smoothing, shader, lighting, or camera settings change.
 | `--texture` | Path | `examples/<subject>/ref.png` | Source photo texture override. |
 | `--albedo` | Path | generated texture if present | Albedo/base color JPG override. |
 | `--roughness` | Path | generated texture if present | Roughness JPG override, connected as Raw. |
-| `--normal` | Path | generated texture if present | Normal JPG override, connected as Raw through tangent-space `bump2d`. |
+| `--normal` | Path | generated texture if present | Normal JPG override, connected as Raw through Arnold `aiNormalMap`. |
 | `--out` | Path | `outputs/characters/<subject>/maya/<subject>_arnold_skin.ma` | Maya ASCII output path. |
 | `--height-cm` | float | `22.0` | Normalize mesh Y height in Maya centimeters. |
 | `--arnold-subdiv-type` | str | `catclark` | Arnold subdivision request: `catclark`, `linear`, or `none`. |
@@ -173,7 +173,7 @@ and saves a clean Maya ASCII scene.
 | `--obj` | Path | `outputs/characters/<subject>/maya/<subject>_face_mesh_maya_cm.obj` | Maya-normalized OBJ override. |
 | `--albedo` | Path | generated albedo JPG | Albedo/base-color texture. |
 | `--roughness` | Path | generated roughness JPG if present | Roughness texture, connected as Raw. |
-| `--normal` | Path | generated normal JPG if present | Normal texture, connected as Raw through tangent-space `bump2d`. |
+| `--normal` | Path | generated normal JPG if present | Normal texture, connected as Raw through Arnold `aiNormalMap`. |
 | `--template` | Path | subject `lightingscene_v001.mb`, then versioned template | Lighting/camera Maya scene to open before mesh import. |
 | `--out` | Path | `outputs/characters/<subject>/maya/<subject>_arnold_skin_clean.ma` | Clean saved Maya scene. |
 | `--layout` | str | `three` | Build one centered mesh or a three-copy comparison layout. |
@@ -199,8 +199,8 @@ If `mayapy` is not visible in a freshly opened terminal, use the full Maya
 Maya 2027 scene validator. Run with Maya's Python (`mayapy.exe`). It opens a
 generated `.ma` or `.mb` and fails unless the scene uses the expected Arnold
 look-dev graph: renderer set to Arnold, `aiStandardSurface` assigned to all
-generated meshes, albedo `sRGB`, roughness/normal `Raw`, tangent-space
-`bump2d`, physical sky connected to skydome, and no legacy area lights.
+generated meshes, albedo `sRGB`, roughness/normal `Raw`, Arnold `aiNormalMap`,
+physical sky connected to skydome, and no legacy area lights.
 
 | Flag | Type | Default | Purpose |
 |------|------|---------|---------|

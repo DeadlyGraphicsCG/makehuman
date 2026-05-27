@@ -272,12 +272,11 @@ def write_shader(
         fh.write(f'connectAttr "{roughness_node}.outColorR" "{name}_skin_aiStandardSurface.specularRoughness";\n')
     if normal is not None:
         normal_node = write_texture_file_node(fh, name, "normal", normal, "Raw")
-        fh.write(f'createNode bump2d -n "{name}_normal_bump2d";\n')
-        fh.write('\tsetAttr ".bi" 1;\n')
-        fh.write('\tsetAttr ".bd" 0.08;\n')
-        fh.write('\tsetAttr ".bf" 1.25;\n')
-        fh.write(f'connectAttr "{normal_node}.outAlpha" "{name}_normal_bump2d.bumpValue";\n')
-        fh.write(f'connectAttr "{name}_normal_bump2d.outNormal" "{name}_skin_aiStandardSurface.normalCamera";\n')
+        fh.write(f'createNode aiNormalMap -n "{name}_normal_aiNormalMap";\n')
+        fh.write('\tsetAttr ".strength" 1;\n')
+        fh.write('\tsetAttr ".tangentSpace" 1;\n')
+        fh.write(f'connectAttr "{normal_node}.outColor" "{name}_normal_aiNormalMap.input";\n')
+        fh.write(f'connectAttr "{name}_normal_aiNormalMap.outValue" "{name}_skin_aiStandardSurface.normalCamera";\n')
     fh.write(f'connectAttr "{name}_skin_aiStandardSurface.outColor" "{name}_skin_SG.surfaceShader";\n')
 
 

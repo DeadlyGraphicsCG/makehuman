@@ -151,14 +151,22 @@ def validate_scene(scene: Path, subject: str, require_three: bool, require_physi
         if not report["normal_sources"]:
             add_issue(issues, "Shader normal has no bump/normal source")
 
-    bump = f"{subject}_normal_bump2d"
-    report["bump_node"] = bump if cmds.objExists(bump) else None
-    if not cmds.objExists(bump):
-        add_issue(issues, f"Missing tangent normal bump2d node: {bump}")
+    normal_map = f"{subject}_normal_aiNormalMap"
+    report["normal_map_node"] = normal_map if cmds.objExists(normal_map) else None
+    if not cmds.objExists(normal_map):
+        add_issue(issues, f"Missing Arnold aiNormalMap node: {normal_map}")
     else:
-        report["bumpInterp"] = cmds.getAttr(f"{bump}.bumpInterp") if cmds.objExists(f"{bump}.bumpInterp") else None
-        if report["bumpInterp"] != 1:
-            add_issue(issues, f"{bump}.bumpInterp is {report['bumpInterp']}, expected 1 for tangent-space normals")
+        report["normal_map_type"] = cmds.nodeType(normal_map)
+        if report["normal_map_type"] != "aiNormalMap":
+            add_issue(issues, f"{normal_map} is {report['normal_map_type']}, expected aiNormalMap")
+        input_sources = cmds.listConnections(f"{normal_map}.input", plugs=True, source=True, destination=False) or []
+        report["normal_map_input_sources"] = input_sources
+        if not any(src.startswith(f"{file_nodes['normal']}.") for src in input_sources):
+            add_issue(issues, f"{normal_map}.input is not driven by {file_nodes['normal']}.outColor")
+        if cmds.objExists(f"{normal_map}.tangentSpace"):
+            report["normal_map_tangent_space"] = bool(cmds.getAttr(f"{normal_map}.tangentSpace"))
+            if not report["normal_map_tangent_space"]:
+                add_issue(issues, f"{normal_map}.tangentSpace is not enabled")
 
     report["aiPhysicalSky"] = cmds.ls(type="aiPhysicalSky") or []
     report["aiSkyDomeLight"] = cmds.ls(type="aiSkyDomeLight") or []

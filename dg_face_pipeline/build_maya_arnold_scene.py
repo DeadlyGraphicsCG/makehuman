@@ -257,6 +257,7 @@ def purge_generated_shader_clutter(cmds, subject: str) -> None:
         "*_normal_file*",
         "*_normal_place2d*",
         "*_normal_bump2d*",
+        "*_normal_aiNormalMap*",
         "*_photo_file*",
         "*_photo_place2d*",
         "face_photo_mat*",
@@ -470,12 +471,11 @@ def create_skin_shader(
         connect_first_if_possible(cmds, f"{rough_node}.outColorR", shader, ("specularRoughness", "specular_roughness"))
     if normal and normal.exists():
         normal_node = create_file_node(cmds, subject, "normal", normal, "Raw")
-        bump = cmds.shadingNode("bump2d", asUtility=True, name=f"{subject}_normal_bump2d")
-        set_if_exists(cmds, bump, "bumpInterp", 1)
-        set_if_exists(cmds, bump, "bumpDepth", 0.08)
-        set_if_exists(cmds, bump, "bumpFilter", 1.25)
-        connect_if_possible(cmds, f"{normal_node}.outAlpha", f"{bump}.bumpValue")
-        connect_first_if_possible(cmds, f"{bump}.outNormal", shader, ("normalCamera", "normal", "n"))
+        normal_map = cmds.shadingNode("aiNormalMap", asUtility=True, name=f"{subject}_normal_aiNormalMap")
+        set_if_exists(cmds, normal_map, "strength", 1.0)
+        set_if_exists(cmds, normal_map, "tangentSpace", True)
+        connect_if_possible(cmds, f"{normal_node}.outColor", f"{normal_map}.input")
+        connect_first_if_possible(cmds, f"{normal_map}.outValue", shader, ("normalCamera", "normal", "n"))
     return shader, sg
 
 

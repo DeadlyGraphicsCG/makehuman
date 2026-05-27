@@ -116,10 +116,11 @@ are marked valid.
   `roughness_file.outColorR` -> `aiStandardSurface.specularRoughness`.
 - Set albedo file color space to `sRGB`.
 - Set roughness and normal file color spaces to `Raw`.
-- Connect tangent normal maps through Maya `bump2d`:
-  `normal_file.outAlpha` -> `bump2d.bumpValue`,
-  `bump2d.outNormal` -> `aiStandardSurface.normalCamera`.
-- Set `bump2d.bumpInterp=1` for tangent-space normals.
+- Connect RGB tangent normal maps through Arnold `aiNormalMap` for render
+  look-dev:
+  `normal_file.outColor` -> `aiNormalMap.input`,
+  `aiNormalMap.outValue` -> `aiStandardSurface.normalCamera`.
+- Enable tangent-space mode on the `aiNormalMap` node.
 - Assign the shader through one shading group to every generated mesh shape.
 - Use Arnold physical sky lighting as:
   `aiPhysicalSky.outColor` -> `aiSkyDomeLight.color`.
@@ -129,7 +130,7 @@ are marked valid.
 Relevant Autodesk Help references:
 
 - `Map a 2D or 3D texture to a material` documents file texture connections to
-  material color and normal maps through `bump2d`.
+  material color and normal-map utility nodes.
 - `Standard Surface` documents Arnold Standard Surface normal-map handling and
   Raw color management for normal maps.
 - `Physical Sky` documents connecting `physical_sky` to `skydome_light.color`
@@ -184,10 +185,10 @@ Current state:
 Future texture-bake state:
 
 - Albedo/base color: `sRGB`
-- Normal maps: `Raw`, connected through `file`/`aiImage -> aiNormalMap ->
-  aiStandardSurface.normalCamera` or through Maya `bump2d` set to tangent-space
-  normals. The current clean-scene builder uses Maya `bump2d` with
-  `bumpInterp=1`, `bumpDepth=0.08`, and `bumpFilter=1.25`.
+- Normal maps: `Raw`, connected through
+  `file.outColor -> aiNormalMap.input -> aiStandardSurface.normalCamera`.
+  Use Maya `bump2d` only for viewport-specific debug scenes, not for the
+  primary Arnold look-dev scene.
 - Bump maps: `Raw`
 - Displacement maps: `Raw`, connected through the shading group displacement
   slot with controlled subdivision/displacement bounds
@@ -198,8 +199,8 @@ source of production pore detail.
 
 Normal-map caveats:
 
-- Do not expect Maya `bump2d` Bump Depth to behave like a normal-map strength
-  control in all Arnold paths.
+- Use `aiNormalMap.strength` for Arnold normal intensity; do not rely on Maya
+  `bump2d` Bump Depth for primary Arnold normal-map strength.
 - If green-channel lighting is inverted, flip G.
 - If tangent axes look wrong, use Arnold controls such as FlipR, FlipG, or Swap
   Tangents.
