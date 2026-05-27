@@ -259,6 +259,8 @@ if needed.
   manifest schema and Maya/Blender adapter contracts
 - [docs/maya_handoff.md](docs/maya_handoff.md) — Maya/Arnold scene handoff,
   lighting template, and shader map policy
+- [docs/manifest_build_order.md](docs/manifest_build_order.md) — honest
+  current-vs-future manifest build order and review/status labels
 - [docs/texturing_xyz_inventory.md](docs/texturing_xyz_inventory.md) —
   external-only TexturingXYZ manifest/inventory workflow
 - [docs/modifier_mapping.md](docs/modifier_mapping.md) — which MH modifier
