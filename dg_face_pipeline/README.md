@@ -4,10 +4,13 @@ End-to-end Python pipeline for `portrait photograph → 3D face mesh`, with two
 parallel back-ends:
 
 1. **Learned mesh** (recommended for likeness) — MediaPipe FaceMesh predicts
-   478 3D landmarks from the photo, combined with the canonical face model's
-   triangulation and optional midpoint subdivision. Output: a self-contained
-   OBJ + UV-keyed projective texture from the source photo. ~3 seconds end-to-end
-   on a CPU. No GPU, no FLAME/BFM license, no extra installs beyond
+   478 3D landmarks from the photo, then writes the landmark positions through
+   a reusable canonical topology. The default canonical is Google's 468-vertex,
+   898-triangle MediaPipe face; the local v002 canonical keeps the same 468
+   landmark index space but uses a quad-dominant 508-face layout
+   (390 quads / 118 tris) for Maya Catmull-Clark tests. Output: a
+   self-contained OBJ + UV-keyed projective texture from the source photo.
+   ~3 seconds end-to-end on a CPU. No GPU, no FLAME/BFM license, no extra installs beyond
    `mediapipe + opencv-python + numpy + matplotlib`.
 
 2. **MakeHuman-modifier path** (recommended for downstream MH rigging /
@@ -89,8 +92,9 @@ Outputs land at:
 
 ### Export the Maya / Arnold handoff
 ```powershell
-python dg_face_pipeline\export_maya_arnold_scene.py --subject winona --height-cm 22 --arnold-subdiv-type catclark --layout three --front-rotate-y -24
-mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject winona --arnold-subdiv-type catclark --arnold-subdiv-iterations 2
+python dg_face_pipeline\learned_face_mesh.py --image dg_face_pipeline\examples\winona\ref.png --out dg_face_pipeline\outputs\characters\winona\data\winona_face_mesh.obj --canonical dg_face_pipeline\canonical_face_model_v002.obj --subdivisions 0
+python dg_face_pipeline\export_maya_arnold_scene.py --subject winona --height-cm 22 --arnold-subdiv-type catclark --layout three --front-rotate-y 0
+mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject winona --arnold-subdiv-type none --arnold-subdiv-iterations 0 --bake-subdivision-levels 4
 ```
 
 This stage is separate from analysis and mesh generation. It writes a
@@ -98,9 +102,9 @@ Maya-centimeter OBJ plus a fallback Maya ASCII Arnold loader scene under
 `outputs\characters\<subject>\maya\`. The `mayapy` command then opens the local
 lighting template, imports the normalized OBJ, creates a clean Arnold skin
 shader network, lays out the three comparison meshes, applies Arnold
-Catmull-Clark subdivision, and saves
-`<subject>_arnold_skin_clean.ma`. Rerun only these Maya stages when shader,
-lighting, camera, smoothing, or scale settings change.
+subdivision attributes or optionally bakes Catmull-Clark into real geometry,
+and saves `<subject>_arnold_skin_clean.ma`. Rerun only these Maya stages when
+shader, lighting, camera, smoothing, or scale settings change.
 
 If a terminal does not yet see `mayapy`, call Maya 2027 directly:
 
@@ -114,6 +118,11 @@ Learned mesh + textured render (recommended for "show me the face"):
 ```powershell
 python dg_face_pipeline\learned_face_mesh.py     --image examples\winona_ref.png --out outputs\data\winona_face_mesh.obj --subdivisions 2
 python dg_face_pipeline\render_learned_mesh.py   --photo examples\winona_ref.png --mesh outputs\data\winona_face_mesh.obj --out outputs\renders\learned.png
+```
+
+Quad-dominant v002 learned mesh for Maya Catmull-Clark testing:
+```powershell
+python dg_face_pipeline\learned_face_mesh.py --image dg_face_pipeline\examples\winona\ref.png --out dg_face_pipeline\outputs\characters\winona\data\winona_face_mesh.obj --canonical dg_face_pipeline\canonical_face_model_v002.obj --subdivisions 0
 ```
 
 MakeHuman-modifier path only:
@@ -137,16 +146,23 @@ dg_face_pipeline/
 ├── render_canonical_report.py         <- thirds/fifths overlay + delta chart
 ├── render_face.py                     <- 4-panel MH-modifier comparison render
 ├── render_learned_mesh.py             <- 3-panel learned-mesh + projective tex
-├── run_full_pipeline.py               <- orchestrator (runs all five)
+├── generate_texture_maps.py           <- photo → albedo/roughness/normal JPGs
+├── run_full_pipeline.py               <- orchestrator (analysis + renders, no Maya)
 ├── canonical_face_model.obj           <- vendored from google/mediapipe (Apache 2.0)
+├── canonical_face_model_v002.obj      <- local quad-dominant canonical experiment
+├── canonical_face_model_v002.ma/.mb   <- Maya source for the v002 canonical
 ├── examples/                          <- committed input portraits
 │   ├── winona/ref.png
 │   ├── subject_b/ref.png
+│   ├── jim_varney/ref.png
 │   ├── winona_ref.png                 <- legacy fallback
 │   └── subject_b_ref.png              <- legacy fallback
 ├── outputs/                           <- generated artifacts (gitignored)
-│   ├── data/                          <-   JSON + OBJ
-│   └── renders/                       <-   PNG comparison frames
+│   └── characters/<subject>/          <-   run_full_pipeline writes here
+│       ├── data/                      <-     JSON + OBJs
+│       ├── renders/                   <-     PNG comparison frames
+│       ├── textures/                  <-     albedo/roughness/normal JPGs
+│       └── maya/                      <-     Maya cm OBJ + .ma scenes
 └── docs/
     ├── architecture.md                <- data flow + design decisions
     ├── cli_reference.md               <- every script flag
@@ -154,6 +170,7 @@ dg_face_pipeline/
     ├── maya_handoff.md                <- Maya/Arnold lighting-template workflow
     ├── modifier_mapping.md            <- Loomis ratio ↔ MH modifier reference
     ├── pipeline_stages.md             <- what to regenerate and when
+    ├── CLAUDE_HANDOFF.md               <- current Maya/v002 state for cold-start handoffs
     └── images/                        <- doc-embedded example frames
 ```
 
@@ -171,11 +188,13 @@ folder is the self-contained execution surface; DG_Brain is the conductor.
 
 ## Licensing
 
-- Pipeline code (this folder, except `canonical_face_model.obj`):
+- Pipeline code (this folder, except canonical face model assets):
   inherits the parent repository's AGPL-3.0 from MakeHuman Community.
 - `canonical_face_model.obj`: Apache-2.0, vendored verbatim from
   `google/mediapipe`, source at
   `mediapipe/modules/face_geometry/data/canonical_face_model.obj`.
+- `canonical_face_model_v002.*`: local quad-dominant reconstruction experiment
+  for the same MediaPipe 468-landmark face index space.
 - Example portraits (`examples/`): third-party images, included for
   pipeline-demonstration purposes only. Replace with your own portraits for
   production use.

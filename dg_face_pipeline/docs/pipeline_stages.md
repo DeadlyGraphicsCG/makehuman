@@ -8,12 +8,12 @@ asset changes.
 | Stage | Command | Main outputs | Rerun when |
 |-------|---------|--------------|------------|
 | Analyze | `python dg_face_pipeline\face_proportion_analyzer.py --image <ref> --out <json>` | `<subject>_face_proportions.json` | Landmark choice, canon rules, ratios, face bbox, or head-pose logic changes. |
-| Mesh | `python dg_face_pipeline\learned_face_mesh.py --image <ref> --out <obj> --subdivisions 2` | `<subject>_face_mesh.obj` | MediaPipe mesh generation, subdivisions, UVs, or source photo changes. |
-| MediaPipe scaffold | `python dg_face_pipeline\export_mediapipe_scaffold.py --subject <subject>` | point-only OBJ + CSV | Retopo/refit scaffold needed without triangle faces. |
+| Mesh | `python dg_face_pipeline\learned_face_mesh.py --image <ref> --out <obj> --subdivisions 2` | `<subject>_face_mesh.obj` | MediaPipe mesh generation, canonical topology, subdivisions, UVs, or source photo changes. |
+| MediaPipe scaffold | `python dg_face_pipeline\export_mediapipe_scaffold.py --subject <subject>` | point-only OBJ + CSV | Retopo/refit scaffold needed without face records. |
 | MakeHuman morph | `python dg_face_pipeline\step_c_apply_modifiers.py --proportions <json> --out_obj <obj>` | `<subject>_morphed.obj` | Modifier mapping, MakeHuman target application, amplify value, or analysis JSON changes. |
 | Debug renders | `python dg_face_pipeline\run_full_pipeline.py --subject <subject>` | canon/MH/learned/full PNGs | Render style changes or any upstream analyze/mesh/MH output changes. |
-| Maya OBJ handoff | `python dg_face_pipeline\export_maya_arnold_scene.py --subject <subject> --layout three --arnold-subdiv-iterations 2` | Maya cm-scale OBJ + loader `.ma` scene | Maya scale, OBJ normals, basic shader settings, or loader-scene settings change. |
-| Clean Maya scene | `mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject <subject>` | `<subject>_arnold_skin_clean.ma` | Lighting template, clean Arnold shader network, mesh layout, or final Maya scene cleanup changes. |
+| Maya OBJ handoff | `python dg_face_pipeline\export_maya_arnold_scene.py --subject <subject> --layout three --front-rotate-y 0` | Maya cm-scale OBJ + loader `.ma` scene | Maya scale, OBJ normals, basic shader settings, or loader-scene settings change. |
+| Clean Maya scene | `mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject <subject>` | `<subject>_arnold_skin_clean.ma` | Lighting template, clean Arnold shader network, mesh layout, baked/render subdivision, or final Maya scene cleanup changes. |
 
 `run_full_pipeline.py` is the convenient all-up command. It runs analyze,
 MakeHuman morph, learned mesh, canon report, MH render, learned render, and
@@ -74,6 +74,16 @@ centimeter-scale OBJ and a fallback loader `.ma`. `build_maya_arnold_scene.py`
 is the preferred look-dev push: it runs inside Maya 2027, opens the lighting
 template, removes stale generated mesh/shader clutter, imports the subject OBJ,
 creates one clean Arnold skin shader, assigns the three generated JPG maps with
-explicit color spaces, creates the three comparison meshes, applies soft edges
-and Arnold Catmull-Clark subdivision, removes unknown nodes, and saves
+explicit color spaces, creates the three comparison meshes, applies soft edges,
+and either requests Arnold Catmull-Clark subdivision or bakes Catmull-Clark
+into real geometry with `--bake-subdivision-levels`, removes unknown nodes, and saves
 `<subject>_arnold_skin_clean.ma`.
+
+For the local quad-dominant MediaPipe test, generate the learned mesh with:
+
+```powershell
+python dg_face_pipeline\learned_face_mesh.py --image <ref> --out <obj> --canonical dg_face_pipeline\canonical_face_model_v002.obj --subdivisions 0
+```
+
+Keeping `--subdivisions 0` preserves the v002 face sizes so Maya can do the
+Catmull-Clark smoothing.

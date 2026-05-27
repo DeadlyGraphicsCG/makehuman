@@ -13,7 +13,7 @@ the Maya handoff.
 |------|------|---------|---------|
 | `--subject` | str | *required* | Short slug (e.g. `winona`); used to name all outputs. |
 | `--image` | Path | `examples/<subject>/ref.png` | Optional source portrait override. Falls back to legacy `examples/<subject>_ref.png`. |
-| `--subdivisions` | int | `2` | Mesh-densification passes. `0` = 478 verts, `1` = 1843, `2` = 7267, `3` = 28867. |
+| `--subdivisions` | int | `2` | Mesh-densification passes for the learned mesh. With the default/v002 468-landmark topology: `0` = 468 verts, `1` = 1833, `2` = 7257, `3` = 28881. |
 | `--amplify` | float | `1.5` | Multiplier on MH modifier values. Above ~2.5 begins distorting MH geometry. |
 | `--canonical` | Path | `canonical_face_model.obj` | Canonical topology OBJ for the learned mesh stage. Use v002 with `--subdivisions 0` to preserve quads. |
 
@@ -106,7 +106,7 @@ smoothing, shader, lighting, or camera settings change.
 | `--front-rotate-y` | float | `-24.0` | Yaw correction so the center mesh faces the render camera. |
 
 ```powershell
-python dg_face_pipeline\export_maya_arnold_scene.py --subject winona --height-cm 22 --arnold-subdiv-type catclark --layout three --front-rotate-y -24
+python dg_face_pipeline\export_maya_arnold_scene.py --subject winona --height-cm 22 --arnold-subdiv-type catclark --layout three --front-rotate-y 0
 ```
 
 See `docs\maya_handoff.md` for the lighting-template contract and shader map
@@ -133,10 +133,11 @@ and saves a clean Maya ASCII scene.
 | `--front-rotate-y` | float | `-24.0` | Yaw correction for the center mesh. |
 | `--arnold-subdiv-type` | str | `catclark` | Arnold subdivision: `catclark`, `linear`, or `none`. |
 | `--arnold-subdiv-iterations` | int | `2` | Arnold per-shape subdivision iterations. |
+| `--bake-subdivision-levels` | int | `0` | Bake this many Catmull-Clark levels into real geometry before saving. Use `4` for the current high-res Winona look-dev scene. |
 | `--keep-template-meshes` | bool | `false` | Keep meshes already in the lighting template. |
 
 ```powershell
-mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject winona --arnold-subdiv-type catclark --arnold-subdiv-iterations 2
+mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject winona --arnold-subdiv-type none --arnold-subdiv-iterations 0 --bake-subdivision-levels 4
 ```
 
 If `mayapy` is not visible in a freshly opened terminal, use the full Maya
@@ -147,9 +148,9 @@ If `mayapy` is not visible in a freshly opened terminal, use the full Maya
 ```
 
 ## export_mediapipe_scaffold.py
-Face/triangle stripper for retopo or refit work. Keeps the exact vertex and UV
-order from a MediaPipe OBJ, omits all `f` triangle records, and writes an
-index CSV.
+Face/topology stripper for retopo or refit work. Keeps the exact vertex and UV
+order from a MediaPipe OBJ, omits all `f` face records, and writes an index
+CSV.
 
 | Flag | Type | Default | Purpose |
 |------|------|---------|---------|

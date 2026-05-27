@@ -109,19 +109,31 @@ extend `resolve_target_path()` in `step_c_apply_modifiers.py` to handle
 the no-min/max case (positive-only, target file is
 `<group>/<target>.target`, no `-min` / `-max` suffix).
 
-## Project the mesh into a different renderer
+## Project the mesh into another renderer or DCC
 
-The OBJs are vanilla Wavefront — open them in Blender, Maya, Three.js,
-Unreal Engine. The `learned` OBJ ships with UVs keyed to the source
-photo dimensions, so you can:
+The OBJs are vanilla Wavefront, so they can still be opened in Blender,
+Maya, Three.js, Unreal Engine, or converted to glTF. The `learned` OBJ
+ships with UVs keyed to the source photo dimensions.
 
-1. Load `<subject>_face_mesh.obj` and `examples/<subject>_ref.png` into
-   Blender.
-2. Create a new Image Texture node in a Principled BSDF material,
-   point it at the photo, link to Base Color via the UV that came in
-   with the OBJ.
-3. The mesh is now textured with the source photo, ready for relighting,
-   compositing, animation, etc.
+For Maya/Arnold, prefer the built pipeline instead of rebuilding the shader
+by hand:
+
+```powershell
+python dg_face_pipeline\export_maya_arnold_scene.py --subject winona --height-cm 22 --layout three --front-rotate-y 0
+mayapy dg_face_pipeline\build_maya_arnold_scene.py --subject winona --arnold-subdiv-type none --arnold-subdiv-iterations 0 --bake-subdivision-levels 4
+```
+
+That path normalizes the OBJ to Maya centimetres, opens the lighting
+template, assigns albedo/roughness/normal maps with explicit color spaces,
+adds the Arnold skin shader, creates the three-mesh comparison layout, and
+saves a clean Maya scene. See `docs/maya_handoff.md` for the lighting
+template contract and shader map policy.
+
+For Blender or another renderer, the manual route is:
+
+1. Load `<subject>_face_mesh.obj` and the generated albedo/source photo.
+2. Create a material, point its base color at the image, and use the OBJ UVs.
+3. Treat roughness/normal maps as non-color data if using generated maps.
 
 For Three.js / glTF: convert via `obj2gltf` or `pyassimp`. UVs survive
 the conversion.
@@ -162,6 +174,7 @@ of this pipeline, extract:
 - `learned_face_mesh.py`
 - `render_learned_mesh.py`
 - `canonical_face_model.obj`
+- `canonical_face_model_v002.obj` if you want the quad-dominant Maya test path
 - the `examples/` directory you care about
 
 into a fresh repo. Delete:

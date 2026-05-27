@@ -2,10 +2,16 @@
 
 ## Data flow
 
+When orchestrated by `run_full_pipeline.py`, all generated artefacts land under
+`outputs/characters/<subject>/{data,renders,maya,textures}/`. When the
+individual scripts are run standalone they default to the flatter
+`outputs/{data,renders}/` layout (see `cli_reference.md` for each script's
+defaults).
+
 ```
                           ┌─────────────────────┐
-                          │  source portrait    │   examples/<name>.png
-                          │  (any aspect ratio) │
+                          │  source portrait    │   examples/<subject>/ref.png
+                          │  (any aspect ratio) │   (legacy: examples/<name>_ref.png)
                           └──────────┬──────────┘
                                      │
                 ┌────────────────────┼────────────────────┐
@@ -17,17 +23,20 @@
     │                    │ │                    │ │  texture sampling) │
     │ - MediaPipe Face   │ │ - MediaPipe Face   │ │                    │
     │   Mesh, 478 lms    │ │   Mesh, 478 lms    │ │                    │
-    │ - cv2.solvePnP →   │ │ - canonical tri-   │ │                    │
-    │   yaw/pitch/roll   │ │   angulation       │ │                    │
-    │ - Loomis ratios    │ │ - subdivide N×     │ │                    │
-    │   (W_eye = 1.0)    │ │ - UVs from lm.x,y  │ │                    │
+    │ - cv2.solvePnP →   │ │ - canonical OBJ    │ │                    │
+    │   yaw/pitch/roll   │ │   topology (v1 tri │ │                    │
+    │ - Loomis ratios    │ │   or v002 quads)   │ │                    │
+    │   (W_eye = 1.0)    │ │ - subdivide N×     │ │                    │
+    │ - canonical thirds │ │   (tri path only)  │ │                    │
+    │   / fifths report  │ │ - UVs from lm.x,y  │ │                    │
     │ - face bbox (px)   │ │ - flip-y, scale    │ │                    │
     └─────────┬──────────┘ └─────────┬──────────┘ └────────────────────┘
               │                      │
               ▼                      ▼
-    outputs/data/                outputs/data/
+    .../data/                    .../data/
     <subj>_face_proportions.json <subj>_face_mesh.obj
               │                      │
+              ├──────────────────────┤
               ▼                      ▼
     ┌────────────────────┐  ┌──────────────────────┐
     │ step_c_apply_      │  │ render_learned_mesh  │  ← uses original photo
@@ -42,32 +51,62 @@
     └─────────┬──────────┘  └─────────┬────────────┘
               │                       │
               ▼                       ▼
-    outputs/data/                 outputs/renders/
+    .../data/                     .../renders/
     <subj>_morphed.obj            <subj>_learned_mesh.png
-              │
-              ▼
-    ┌────────────────────┐
-    │ render_face.py     │  ← uses photo + bbox + pose from analyzer JSON
-    │                    │
-    │ - 4-panel:         │
-    │   photo / base /   │
-    │   morphed / drift  │
-    │   heatmap          │
-    │ - body-only filter │
-    │ - clamped head     │
-    │   pose rotation    │
-    │ - shared bbox      │
-    └─────────┬──────────┘
-              │
-              ▼
-    outputs/renders/<subj>_mh_compare.png
+              │                       │
+              ▼                       ▼
+    ┌────────────────────┐  ┌──────────────────────┐
+    │ render_face.py     │  │ render_canonical_    │  ← thirds/fifths
+    │                    │  │ report.py            │    scaffold + delta chart
+    │ - 4-panel:         │  │                      │
+    │   photo / base /   │  │ - photo overlay      │
+    │   morphed / drift  │  │ - subject vs canon   │
+    │   heatmap          │  │   delta bars         │
+    │ - body-only filter │  │                      │
+    │ - clamped head     │  │                      │
+    │   pose rotation    │  │                      │
+    └─────────┬──────────┘  └─────────┬────────────┘
+              │                       │
+              ▼                       ▼
+    .../renders/                  .../renders/
+    <subj>_mh_compare.png         <subj>_canon_report.png
               │
               │       ┌────────────────────────────────────────┐
               └──────►│ run_full_pipeline.py :: stack_renders()│
                       └────────────────────┬───────────────────┘
                                            │
                                            ▼
-                            outputs/renders/<subj>_full_pipeline.png
+                         .../renders/<subj>_full_pipeline.png
+
+      ── separate Maya / Arnold handoff stage (manual, not in run_full_pipeline) ──
+
+    .../data/<subj>_face_mesh.obj
+              │
+              ▼
+    ┌────────────────────────────┐    ┌────────────────────────────┐
+    │ export_maya_arnold_scene   │    │ generate_texture_maps.py   │
+    │ .py                        │    │ - photo → albedo / rough / │
+    │ - normalize Y to cm        │    │   normal JPGs              │
+    │ - write Maya-cm OBJ        │    │ - rewrites OBJ .mtl refs   │
+    │ - write fallback Arnold .ma│    └────────────────────────────┘
+    └─────────┬──────────────────┘
+              │
+              ▼
+    ┌────────────────────────────┐
+    │ build_maya_arnold_scene.py │  ← run with mayapy.exe (Maya 2027)
+    │                            │
+    │ - open lighting template   │
+    │ - import normalized OBJ    │
+    │ - layout (one / three)     │
+    │ - aiStandardSurface +      │
+    │   aiColorCorrect skin grade│
+    │ - Arnold subdiv (catclark) │
+    │ - bake-subdivision-levels  │
+    │   optional (live x4 etc.)  │
+    └─────────┬──────────────────┘
+              │
+              ▼
+    .../maya/<subj>_arnold_skin_clean.ma
 ```
 
 ## Per-script responsibilities
@@ -107,11 +146,22 @@ proportions it builds an OBJ:
    pixel space (x · w, (1 − y) · h, −z · w). y is flipped so the OBJ is
    y-up.
 2. UVs are `(lm.x, 1 − lm.y)` — origin bottom-left, OBJ convention.
-3. Triangulation comes from `canonical_face_model.obj` (898 triangles,
-   898 if `subdivisions=0`).
-4. With `--subdivisions N`, each pass midpoint-subdivides every triangle
-   into 4. Edge midpoints are shared via a cache so the mesh stays
-   watertight. UVs interpolate linearly (correct for projective texture).
+3. Topology comes from `--canonical <obj>`, defaulting to the vendored
+   `canonical_face_model.obj` (Google MediaPipe, 468 verts, 898
+   triangles). The pipeline also ships
+   `canonical_face_model_v002.obj`, a local quad-dominant retopology
+   (468 verts, 508 faces — 390 quads + 118 triangles) that preserves
+   MediaPipe's vertex/UV index space but gives Catmull-Clark a much
+   better starting point. When the canonical mesh has 468 verts but
+   MediaPipe returns 478 (refine_landmarks=True), the trailing 10
+   iris landmarks are dropped before writing.
+4. The OBJ writer preserves whatever face arity the canonical uses
+   (triangles, quads, or n-gons); it does not force triangulation.
+5. With `--subdivisions N` (triangle path only), each pass midpoint-
+   subdivides every triangle into 4. Edge midpoints are shared via a
+   cache so the mesh stays watertight; UVs interpolate linearly. Use
+   `--subdivisions 0` with the v002 canonical to keep authored quads
+   intact for Maya/Arnold Catmull-Clark.
 
 ### render_face.py
 The MH-modifier-path renderer. Four panels (photo / baseline / morphed /
@@ -131,10 +181,60 @@ RGB at its centroid UV. Lambert shading is dampened (`shade_strength=0.55`)
 because the photo already contains baked-in lighting from the original
 exposure.
 
+### render_canonical_report.py
+Renders the canonical proportionality report — a thirds-and-fifths
+scaffold overlaid on the source photograph, plus a bar chart of subject-
+ratio deltas against the Loomis baselines. Reads the
+`canonical_analysis` block from the analyzer JSON; writes a single PNG.
+
+### export_mediapipe_scaffold.py
+Stripped-down OBJ + CSV exporter used for retopo / refit work. Keeps the
+exact vertex and UV order from a MediaPipe OBJ, drops the `f` records
+(point-only by default; `--raw` switches to the raw MediaPipe predicted
+mesh as input). Useful when the next step is a hand- or tool-assisted
+retopology that needs the original index space.
+
+### generate_texture_maps.py
+Single-photo texture helper. Reads `examples/<subject>/ref.png` and
+writes `albedo.jpg`, `roughness.jpg`, and `normal.jpg` into
+`outputs/characters/<subject>/textures/`, then rewrites the subject's
+OBJ `.mtl` files to reference them. Pragmatic, not photogrammetry — but
+enough to drive the Arnold skin shader for look-dev.
+
+### export_maya_arnold_scene.py
+Maya / Arnold handoff stage, pure-Python (no Maya install needed). Reads
+the subject's `<subject>_face_mesh.obj`, normalises Y-height to Maya
+centimetres (default 22 cm, head-height for a centimetre-scale Maya
+scene), and writes both a Maya-cm OBJ and a fallback Maya ASCII (`.ma`)
+loader that builds an `aiStandardSurface` skin shader, wires
+albedo/roughness/normal maps, and lays out one or three comparison
+meshes. The `.ma` is usable as-is; the matching `build_maya_arnold_scene`
+upgrade is preferred when Maya 2027 + Arnold is available.
+
+### build_maya_arnold_scene.py
+Maya 2027 scene builder; requires `mayapy.exe`. Opens a lighting template
+(per-subject `lightingscene_v001.mb` if present, else the versioned
+default), removes stale generated meshes / shader nodes from prior runs,
+imports the normalised Maya-cm OBJ, builds an Arnold skin shader (albedo
+piped through `aiColorCorrect` for darker base tones, raw roughness /
+normal inputs, smaller SSS scale tuned for cm-scale geometry), positions
+the three comparison meshes at `rotateY ∈ {-45, 0, 45}` with the centre
+at `[0, 100, 0]`, enables Arnold Catmull-Clark subdivision, and
+optionally bakes subdivision (`--bake-subdivision-levels N`) into the
+stored mesh. Saves a clean Maya ASCII at
+`<subject>_arnold_skin_clean.ma`. This stage is **decoupled** from
+`run_full_pipeline.py` — rerun only when shader / lighting / camera /
+smoothing / scale change. See `docs/maya_handoff.md` for the lighting-
+template contract and `docs/pipeline_stages.md` for the regen rules.
+
 ### run_full_pipeline.py
-Imports every other script as a Python module (no `subprocess`), runs them
-in sequence with per-subject output naming, then concatenates the MH and
-learned PNGs vertically into a single combined frame.
+Imports the analysis + render scripts as Python modules (no
+`subprocess`), runs them in sequence with per-subject output naming
+under `outputs/characters/<subject>/`, then concatenates the MH and
+learned PNGs vertically into a single combined frame. Accepts
+`--canonical <obj>` and passes it through to the learned-mesh stage so
+the v002 quad topology is selectable. Does **not** run the Maya /
+Arnold export — that stage is intentionally separate.
 
 ## Design decisions
 
@@ -148,9 +248,11 @@ already had installed for the landmark-extraction step. Its mesh is
 sparser (478 vs ~5000) but completely unencumbered and zero-install.
 
 The trade-off: no scalp, no ears, no back of head, no neck. Just the face
-mask. For the immediate goal ("show me a 3D Winona from a photo") that is
-fine; for production-quality character generation, swap in MICA when you
-have the FLAME license sorted. See `extending.md` for the swap pattern.
+mask. The v002 canonical improves Catmull-Clark behavior for Maya look-dev,
+but it is still a MediaPipe face mask, not a production rig topology. For
+production-quality character generation, either swap in a full-head model
+such as MICA/FLAME or transfer the likeness onto MakeHuman topology. See
+`extending.md` for the swap pattern.
 
 ### Why also keep the MakeHuman-modifier path?
 Two reasons.
