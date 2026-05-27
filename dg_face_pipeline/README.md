@@ -71,7 +71,20 @@ python -m pip install --upgrade pip
 python -m pip install mediapipe==0.10.18 opencv-python==4.10.0.84 numpy==1.26.4 matplotlib==3.9.2
 ```
 
-### Run the full pipeline
+Optional, for `extract_depth_normal.py` (Depth Anything v2):
+```powershell
+python -m pip install torch torchvision transformers accelerate
+```
+A CPU-only install works fine (Depth Anything Base runs in ~3s on CPU);
+CUDA-enabled torch gives ~0.3s per image on an RTX-class GPU. First
+inference downloads the model checkpoint to your Hugging Face cache.
+
+### Run the full pipeline -- drag-and-drop (easiest)
+Drop a portrait image onto **`dg_face_pipeline\face_pipeline.bat`** in
+Explorer. Slug is derived from the filename, outputs go to
+`outputs\characters\<slug>\`. No CLI arguments required.
+
+### Run the full pipeline -- CLI
 ```powershell
 python dg_face_pipeline\run_full_pipeline.py --subject winona
 ```
@@ -146,7 +159,10 @@ dg_face_pipeline/
 ├── render_canonical_report.py         <- thirds/fifths overlay + delta chart
 ├── render_face.py                     <- 4-panel MH-modifier comparison render
 ├── render_learned_mesh.py             <- 3-panel learned-mesh + projective tex
-├── generate_texture_maps.py           <- photo → albedo/roughness/normal JPGs
+├── generate_texture_maps.py           <- photo → albedo/roughness/normal JPGs (luminance-derived)
+├── extract_depth_normal.py            <- photo → depth + true normals (Depth Anything v2)
+├── segment_face_regions.py            <- split learned OBJ into lip/eye/brow/skin groups
+├── face_pipeline.bat                  <- drag-and-drop entry point (auto slug from filename)
 ├── run_full_pipeline.py               <- orchestrator (analysis + renders, no Maya)
 ├── canonical_face_model.obj           <- vendored from google/mediapipe (Apache 2.0)
 ├── canonical_face_model_v002.obj      <- local quad-dominant canonical experiment

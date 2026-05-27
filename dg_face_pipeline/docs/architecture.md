@@ -201,6 +201,38 @@ writes `albedo.jpg`, `roughness.jpg`, and `normal.jpg` into
 OBJ `.mtl` files to reference them. Pragmatic, not photogrammetry — but
 enough to drive the Arnold skin shader for look-dev.
 
+Note: the `normal.jpg` here is a Sobel gradient of photo luminance — a
+fake bump derived from pixel brightness, not real surface geometry. For
+true geometric normals see `extract_depth_normal.py`.
+
+### segment_face_regions.py
+Post-processor that splits a learned-mesh OBJ into lip / eye / brow / skin
+groups using MediaPipe's `FACEMESH_LIPS`, `FACEMESH_LEFT_EYE`,
+`FACEMESH_RIGHT_EYE`, and `FACEMESH_*_EYEBROW` landmark sets. A face is
+assigned to a region if a majority of its verts belong to that region's
+index set; ties resolve toward the more specific region (lips > eye >
+brow > skin). Output is a parallel `_seg.obj` + `_seg.mtl` with four
+materials so Maya / Blender / UE can bind distinct shaders per region.
+Geometry is unchanged from input.
+
+### extract_depth_normal.py
+Monocular depth extraction via **Depth Anything v2** (Apache-2.0, Hugging
+Face). Loads the chosen checkpoint (Small / Base / Large), runs inference
+on the photo, then writes:
+
+1. `<slug>_photo_depth_raw.npy` — float depth array (HxW, arbitrary scale)
+2. `<slug>_photo_depth.png` — 8-bit normalised depth visualisation
+3. `<slug>_photo_normal.png` — tangent-space normal map from Sobel of depth
+4. `<slug>_per_vertex_depth.csv` — depth sampled at each FaceMesh
+   landmark's UV coordinate (505 rows for a closed v002 mesh)
+5. `<slug>_photo_depth_meta.json` — model id + depth range + device
+
+The per-vertex CSV is the input format for the (future) multi-source
+blending step: collect N CSVs from N photos of the same subject, align
+their depth scales via the IPD anchor, average per vertex, then apply as
+Z-displacement on the v002 mesh. That's "photogrammetry for moving skin"
+in practical form.
+
 ### export_maya_arnold_scene.py
 Maya / Arnold handoff stage, pure-Python (no Maya install needed). Reads
 the subject's `<subject>_face_mesh.obj`, normalises Y-height to Maya
@@ -282,6 +314,62 @@ The clamp keeps the rendered head from tipping unrealistically forward
 while still letting the roll match the photo's head tilt. To remove the
 clamp, supply real intrinsics (focal length, principal point) at the
 analyzer level.
+
+### Why is pitch *intentionally* left in the mesh after pose-neutralization?
+The pose-neutralization step (`learned_face_mesh.py --neutralize-pose`)
+applies `cv2.solvePnP` to recover the photo's yaw / pitch / roll, then
+inverts only **yaw + roll** before writing the mesh. Pitch is deliberately
+left at the photo's natural value.
+
+Reason: `solvePnP` with our placeholder camera intrinsics (`focal = image_w`,
+principal point at image centre) systematically **overshoots pitch**. On a
+true frontal shot it can report ~+10° pitch where the real value is closer
+to zero. If we inverted that bogus pitch we'd over-rotate the mesh upward
+visibly (chin lifts toward camera). Yaw and roll are robust because they
+are essentially landmark-derived (yaw from horizontal asymmetry, roll from
+eye-line angle), so we invert those fully.
+
+Workarounds: pass `--neutralize-pitch` to apply the full PnP pitch (use only
+when you have real intrinsics), or `--pitch-scale 0.5` to apply a fraction.
+
+### Why is the face-mask boundary closed (extrude + fan-cap) before Maya?
+The v002 canonical is an **open-boundary face mask** (no scalp, no closed
+top of head). Maya/Arnold Catmull-Clark subdivision on an open mesh collapses
+the boundary inward with each level -- after 4 levels of CC, the boundary
+detaches visibly from the interior surface, creating a "lip" with a gap
+between it and the inner face. This was visible in any non-frontal camera
+angle.
+
+`learned_face_mesh.py --close-boundary` walks MediaPipe's
+`FACEMESH_FACE_OVAL` ring (36 verts), extrudes it backward by 50% of the
+face depth, stitches the boundary to the back-ring with 36 wall quads, and
+caps the back with a 36-triangle fan to a central pole vertex. Result: a
+closed shell (505 verts / 580 faces) that CC subdivides cleanly. The
+high-valence pole at the back is acceptable because no production camera
+angle in this pipeline ever looks at the back of the head.
+
+This is a v002-specific patch. When we swap to a full-head model
+(MICA/FLAME) the boundary is already closed and this step becomes a no-op.
+
+### Why does depth-from-photo (Depth Anything v2) belong in the pipeline?
+The mesh from MediaPipe is **single-photo** -- it's a learned 3DMM-style
+prediction of "what's likely 3D given this 2D image", not a measurement. For
+production likeness we need real depth, ideally fused from multiple photos
+of the same subject (like photogrammetry, but tolerating skin
+deformation/expression changes).
+
+`extract_depth_normal.py` is the first half of that workflow: it runs
+**Depth Anything v2** (Apache-2.0, Hugging Face) on the photo to produce a
+relative-depth map, derives a Sobel-gradient normal map from it, and
+**samples depth at each of the 505 mesh-vertex UV coordinates**. That CSV
+output is the input the (future) multi-source blending step will consume:
+N CSV files from N photos of the same subject, scale-aligned via an IPD
+anchor, averaged per vertex, then applied as Z-displacement on the v002 mesh.
+
+The single-photo case already gives improved albedo/roughness/normal maps
+for the Arnold skin shader -- the depth-derived normal map is real surface
+relief (pore-scale features show up) rather than the luminance-derived bump
+that `generate_texture_maps.py` writes from a Sobel of pixel brightness.
 
 ### Why 9 MH modifiers and not 50?
 The current 9 cover broad scale axes (head/forehead/nose/mouth horiz +

@@ -37,6 +37,11 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+# Reuse the canonical 3D face points + landmark indices the analyzer uses for
+# its PnP solve. Single source of truth -- if the analyzer's calibration ever
+# changes, the neutralization here picks up the change for free.
+from face_proportion_analyzer import CANONICAL_FACE_3D, CANONICAL_LM_IDS
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -169,6 +174,262 @@ def subdivide_n(
 
 
 # -----------------------------------------------------------------------------
+# Pose neutralization + per-vertex normals
+# -----------------------------------------------------------------------------
+def neutralize_pose_image_frame(
+    raw_xyz: np.ndarray, lms, w: int, h: int,
+    neutralize_pitch: bool = False,
+    pitch_scale: float = 0.0,
+) -> tuple[np.ndarray, tuple[float, float, float] | None]:
+    """Apply the inverse PnP rotation to vertices in MediaPipe image-coord frame.
+
+    Solves `cv2.solvePnP` against the analyzer's 6 canonical landmarks to find
+    the rotation that takes the neutral face -> the photo's pose, decomposes it
+    into yaw/pitch/roll, and applies the inverse YAW + ROLL only by default.
+
+    Why pitch is excluded by default: `cv2.solvePnP` with placeholder camera
+    intrinsics (we pass focal = image_width) systematically overshoots pitch.
+    On a true frontal shot it can report ~+10 deg pitch when the real value is
+    closer to zero. Inverting that bogus pitch tilts the neutralized mesh
+    upward by the overshoot, which looks worse than leaving the photo's pitch
+    alone. Yaw and roll are robust (yaw from landmark x-asymmetry, roll from
+    eye-line angle) and so we always invert those.
+
+    Pass `neutralize_pitch=True` if you have real camera intrinsics or a known-
+    frontal subject and want full Z-forward neutral, or use `pitch_scale` in
+    [0, 1] to apply a fraction of the detected pitch (e.g. 0.5 cancels half).
+
+    Operates in the raw image-pixel-scale frame BEFORE the y-flip, because that
+    is the same frame PnP was solved in. Returns (neutralized_xyz, debug_pose).
+    """
+    import math as _math
+    pts_2d = np.array(
+        [[lms[i].x * w, lms[i].y * h] for i in CANONICAL_LM_IDS],
+        dtype=np.float64,
+    )
+    focal = float(w)
+    cx, cy = w / 2.0, h / 2.0
+    K = np.array([[focal, 0.0, cx], [0.0, focal, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    ok, rvec, _ = cv2.solvePnP(
+        CANONICAL_FACE_3D, pts_2d, K, np.zeros((4, 1), dtype=np.float64),
+        flags=cv2.SOLVEPNP_ITERATIVE,
+    )
+    if not ok:
+        log.warning("PnP solve failed; pose neutralization skipped")
+        return raw_xyz, None
+    R_full, _ = cv2.Rodrigues(rvec)
+
+    # Decompose R into (yaw, pitch, roll). Same convention as the analyzer.
+    sy = _math.hypot(R_full[0, 0], R_full[1, 0])
+    if sy > 1e-6:
+        pitch_deg = _math.degrees(_math.atan2(-R_full[2, 0], sy))
+        yaw_deg = _math.degrees(_math.atan2(R_full[1, 0], R_full[0, 0]))
+        roll_deg = _math.degrees(_math.atan2(R_full[2, 1], R_full[2, 2]))
+    else:
+        pitch_deg = _math.degrees(_math.atan2(-R_full[2, 0], sy))
+        yaw_deg = 0.0
+        roll_deg = _math.degrees(_math.atan2(-R_full[1, 2], R_full[1, 1]))
+
+    # Decide which pitch to actually undo. Yaw + roll always neutralized fully.
+    pitch_to_apply = pitch_deg if neutralize_pitch else pitch_deg * pitch_scale
+
+    # Recompose a clean rotation matrix from the (possibly zeroed) angles.
+    # Order Ry(yaw) @ Rx(pitch) @ Rz(roll) matches the analyzer's decomposition.
+    y = _math.radians(yaw_deg)
+    p = _math.radians(pitch_to_apply)
+    r = _math.radians(roll_deg)
+    cy_, sy_ = _math.cos(y), _math.sin(y)
+    cp, sp = _math.cos(p), _math.sin(p)
+    cr, sr = _math.cos(r), _math.sin(r)
+    Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]], dtype=np.float64)
+    Rx = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]], dtype=np.float64)
+    Rz = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]], dtype=np.float64)
+    R_apply = Ry @ Rx @ Rz
+
+    centroid = raw_xyz.mean(axis=0)
+    # (v - c) @ R is equivalent to applying R.T to each (v - c). R_apply takes
+    # neutral -> photo, so R_apply.T takes photo -> neutral.
+    neutralized = (raw_xyz - centroid) @ R_apply + centroid
+    return neutralized, (yaw_deg, pitch_to_apply, roll_deg)
+
+
+# -----------------------------------------------------------------------------
+# Boundary closure
+# -----------------------------------------------------------------------------
+def _ordered_face_oval_ring() -> List[int]:
+    """Walk MediaPipe's FACEMESH_FACE_OVAL edge set into an ordered loop.
+
+    The edge set is unordered; we build adjacency and walk it. Returns a list
+    of vertex indices in either CW or CCW order around the face perimeter (we
+    don't care which -- the closure logic handles winding by checking the
+    resulting normal direction).
+    """
+    con = mp.solutions.face_mesh_connections
+    edges = list(con.FACEMESH_FACE_OVAL)
+    adj: dict[int, list[int]] = {}
+    for a, b in edges:
+        adj.setdefault(a, []).append(b)
+        adj.setdefault(b, []).append(a)
+    start = edges[0][0]
+    ordered = [start]
+    prev = -1
+    cur = start
+    while True:
+        neighbors = adj[cur]
+        nxt = neighbors[0] if neighbors[0] != prev else neighbors[1]
+        if nxt == start:
+            break
+        ordered.append(nxt)
+        prev = cur
+        cur = nxt
+    return ordered
+
+
+def close_face_boundary(
+    verts: np.ndarray,
+    faces: List[List[int]],
+    uvs: np.ndarray,
+    depth_factor: float = 0.5,
+) -> tuple[np.ndarray, List[List[int]], np.ndarray]:
+    """Close the open face-mask by extruding the FACE_OVAL boundary backward.
+
+    Open meshes pose a problem for Catmull-Clark subdivision in Maya/Arnold:
+    the boundary collapses inward with each level, creating a visible "lip"
+    that detaches from the inner surface. Closing the mesh first eliminates
+    the boundary entirely, so CC subdivides uniformly.
+
+    Closure steps:
+      1. Walk MediaPipe's FACEMESH_FACE_OVAL (36 verts forming the perimeter
+         loop) and order them around the ring.
+      2. For each boundary vert, create a new "back-ring" vert offset
+         backward in -Z by `depth_factor * face_depth`.
+      3. Stitch boundary -> back-ring with 36 quad faces (uniform arity,
+         CC-friendly).
+      4. Add a single back-center vert; cap the back ring with a 36-tri fan
+         to that center vert. The resulting extraordinary vertex (valence 36)
+         is at the back of the head where no camera angle in our pipeline
+         looks -- acceptable trade-off.
+
+    New verts get UVs derived from their boundary parents (back-ring) or the
+    texture centre (back-cap centre), so a downstream texture lookup still
+    returns something sensible (skin-edge colour for the wall, nose-tip
+    colour for the cap centre).
+
+    Returns the extended (verts, faces, uvs).
+    """
+    ring = _ordered_face_oval_ring()
+    # Filter to valid indices (in case the canonical mesh has fewer verts).
+    ring = [r for r in ring if r < len(verts)]
+    if len(ring) < 8:
+        log.warning("FACE_OVAL ring too small (%d); skipping closure", len(ring))
+        return verts, faces, uvs
+
+    ring_arr = np.array(ring, dtype=np.int64)
+    boundary_v = verts[ring_arr]
+    z_min, z_max = float(verts[:, 2].min()), float(verts[:, 2].max())
+    extrude_depth = (z_max - z_min) * depth_factor
+
+    # Back-ring verts: same XY, offset backward in -Z (since +Z is forward
+    # in our OBJ convention).
+    back_ring_v = boundary_v.copy()
+    back_ring_v[:, 2] -= extrude_depth
+
+    # Back-center cap vert: XY centroid of the boundary, Z = backmost.
+    cap_center = np.array([
+        boundary_v[:, 0].mean(),
+        boundary_v[:, 1].mean(),
+        z_min - extrude_depth,
+    ])
+
+    n_orig = len(verts)
+    back_ring_idx = list(range(n_orig, n_orig + len(ring)))
+    cap_idx = n_orig + len(ring)
+
+    new_verts = np.vstack([verts, back_ring_v, cap_center.reshape(1, 3)])
+
+    # UVs: back-ring inherits boundary UVs (so the wall samples the photo
+    # edge -- usually skin tone). Cap centre gets (0.5, 0.5) -- middle of
+    # the photo, typically nose region. Both placeholder; a follow-up can
+    # paint a proper back-of-head UV island.
+    if len(uvs) > 0:
+        boundary_uvs = uvs[ring_arr]
+        new_uvs = np.vstack([uvs, boundary_uvs, np.array([[0.5, 0.5]])])
+    else:
+        new_uvs = uvs
+
+    # New faces: quad wall + triangle cap.
+    new_faces = list(faces)
+
+    # Determine winding: compute the cross product of the first quad. If its
+    # +Z component is positive (faces forward), the boundary is wound CW from
+    # the front -- we need to flip the quad order to get outward-facing
+    # normals on the back wall.
+    sample_quad_normal = np.cross(
+        verts[ring[1]] - verts[ring[0]],
+        back_ring_v[0] - verts[ring[0]],
+    )
+    flip_winding = sample_quad_normal[2] < 0  # back-wall normals should point outward (in -Z), not into the head
+
+    for i in range(len(ring)):
+        v0 = ring[i]
+        v1 = ring[(i + 1) % len(ring)]
+        v0_back = back_ring_idx[i]
+        v1_back = back_ring_idx[(i + 1) % len(ring)]
+        if flip_winding:
+            new_faces.append([v0, v1, v1_back, v0_back])
+        else:
+            new_faces.append([v0, v0_back, v1_back, v1])
+
+    # Cap: 36-tri fan from back ring to cap centre.
+    for i in range(len(ring)):
+        a = back_ring_idx[i]
+        b = back_ring_idx[(i + 1) % len(ring)]
+        if flip_winding:
+            new_faces.append([a, b, cap_idx])
+        else:
+            new_faces.append([a, cap_idx, b])
+
+    log.info(
+        "Closed boundary: +%d verts (%d back-ring + 1 cap centre), +%d faces "
+        "(%d wall quads + %d cap tris)  extrude_depth=%.3f units",
+        len(ring) + 1, len(ring), len(ring) * 2, len(ring), len(ring),
+        extrude_depth,
+    )
+    return new_verts, new_faces, new_uvs
+
+
+def compute_vertex_normals(
+    verts: np.ndarray, faces: List[List[int]],
+) -> np.ndarray:
+    """Area-weighted per-vertex normals from arbitrary-arity faces.
+
+    For each face, fan-triangulates around vertex 0, computes the triangle
+    normal (whose magnitude == twice the triangle area), and adds that vector
+    to each participating vertex. Final normalize per vertex.
+
+    The resulting normals are true geometric normals from the actual mesh
+    topology -- not the Sobel-from-luminance approximation that
+    generate_texture_maps.py writes. Use these for shading, baking, and any
+    downstream geometric pipeline (Blender/Maya/UE) that expects vn lines.
+    """
+    vn = np.zeros((len(verts), 3), dtype=np.float64)
+    for face in faces:
+        if len(face) < 3:
+            continue
+        v0 = verts[face[0]]
+        for i in range(1, len(face) - 1):
+            v1 = verts[face[i]]
+            v2 = verts[face[i + 1]]
+            n = np.cross(v1 - v0, v2 - v0)  # area-weighted
+            vn[face[0]]     += n
+            vn[face[i]]     += n
+            vn[face[i + 1]] += n
+    lengths = np.linalg.norm(vn, axis=1, keepdims=True)
+    lengths = np.where(lengths == 0, 1.0, lengths)
+    return vn / lengths
+
+
+# -----------------------------------------------------------------------------
 # Reconstruction
 # -----------------------------------------------------------------------------
 def reconstruct(
@@ -176,6 +437,9 @@ def reconstruct(
     out_obj: Path,
     subdivisions: int = 0,
     canonical_obj: Path = CANONICAL_OBJ,
+    neutralize_pose: bool = True,
+    write_normals: bool = True,
+    close_boundary: bool = True,
 ) -> Path:
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
@@ -203,12 +467,32 @@ def reconstruct(
     # lm.z is roughly in the same scale as lm.x (relative depth, negative
     # toward camera for the canonical model orientation).
     #
-    # Flip y so the OBJ is y-up (matches our renderer's MakeHuman convention)
-    # and scale by image width so x/y/z are in commensurate units.
-    verts = np.array(
-        [[lm.x * w, (1.0 - lm.y) * h, -lm.z * w] for lm in lms],
+    # Stage 1: build raw_xyz in image-coord frame (y-down, depth-in-units-of-x).
+    # This is the same frame the analyzer's PnP solve operates in, so we
+    # neutralize pose HERE before flipping y/z for OBJ output.
+    raw_xyz = np.array(
+        [[lm.x * w, lm.y * h, lm.z * w] for lm in lms],
         dtype=np.float64,
     )
+
+    if neutralize_pose:
+        raw_xyz, pose = neutralize_pose_image_frame(raw_xyz, lms, w, h)
+        if pose is not None:
+            log.info(
+                "Pose-neutralized mesh (undid yaw=%.1f pitch=%.1f roll=%.1f deg from photo)",
+                *pose,
+            )
+    else:
+        log.info("Pose neutralization disabled; mesh keeps the photo's head pose")
+
+    # Stage 2: convert to OBJ y-up convention. Flip y (image-coord y-down -> OBJ
+    # y-up) and negate z (so positive-z is into the scene, matching the renderer's
+    # MakeHuman convention).
+    verts = np.column_stack([
+        raw_xyz[:, 0],
+        h - raw_xyz[:, 1],
+        -raw_xyz[:, 2],
+    ])
     log.info("Reconstructed %d landmark verts from FaceMesh", len(verts))
 
     faces = load_canonical_faces(canonical_obj)
@@ -249,6 +533,19 @@ def reconstruct(
         verts, uvs, tris = subdivide_n(verts, uvs, tris, subdivisions)
         faces = tris.tolist()
 
+    # Close the open face-mask boundary by extruding backward + capping. This
+    # MUST happen before normal computation so the new geometry gets proper
+    # normals, and BEFORE the OBJ writer so the closure faces participate in
+    # downstream Catmull-Clark subdivision in Maya without boundary collapse.
+    if close_boundary:
+        verts, faces, uvs = close_face_boundary(verts, faces, uvs)
+
+    # Compute true geometric per-vertex normals from the actual mesh topology.
+    # Vertex index == UV index == normal index, so face refs become v/vt/vn
+    # with all three columns equal -- DCC apps that ignore vn lines still load
+    # the mesh correctly.
+    normals = compute_vertex_normals(verts, faces) if write_normals else None
+
     out_obj.parent.mkdir(parents=True, exist_ok=True)
     texture = copy_texture_for_obj(image_path, out_obj)
     mtl = write_mtl_for_obj(out_obj, texture)
@@ -257,7 +554,10 @@ def reconstruct(
         fh.write(f"# Source image: {image_path}\n")
         fh.write(f"# Canonical topology: {canonical_obj}\n")
         fh.write(f"# Image size: {w} x {h}\n")
-        fh.write(f"# Verts: {len(verts)}  UVs: {len(uvs)}  Faces: {len(faces)}\n")
+        fh.write(f"# Pose-neutralized: {bool(neutralize_pose)}\n")
+        fh.write(f"# Vertex normals: {bool(write_normals)}\n")
+        fh.write(f"# Verts: {len(verts)}  UVs: {len(uvs)}  Faces: {len(faces)}")
+        fh.write(f"  Normals: {len(normals) if normals is not None else 0}\n")
         fh.write(f"mtllib {mtl.name}\n")
         fh.write("g face_mesh\n")
         fh.write(f"usemtl {DEFAULT_MATERIAL_NAME}\n")
@@ -265,11 +565,22 @@ def reconstruct(
             fh.write(f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n")
         for uv in uvs:
             fh.write(f"vt {uv[0]:.6f} {uv[1]:.6f}\n")
+        if normals is not None:
+            for n in normals:
+                fh.write(f"vn {n[0]:.6f} {n[1]:.6f} {n[2]:.6f}\n")
         for face in faces:
-            # Vertex index == UV index for this mesh (1-indexed in OBJ).
-            parts = [f"{idx + 1}/{idx + 1}" for idx in face]
+            # Vertex index == UV index == normal index for this mesh (1-indexed).
+            if normals is not None:
+                parts = [f"{idx + 1}/{idx + 1}/{idx + 1}" for idx in face]
+            else:
+                parts = [f"{idx + 1}/{idx + 1}" for idx in face]
             fh.write("f " + " ".join(parts) + "\n")
-    log.info("Wrote face mesh OBJ: %s (verts+UVs)", out_obj)
+    log.info(
+        "Wrote face mesh OBJ: %s (verts+UVs%s%s)",
+        out_obj,
+        ", normals" if normals is not None else "",
+        ", pose-neutralized" if neutralize_pose else "",
+    )
     return out_obj
 
 
@@ -311,6 +622,39 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
             "to preserve the local quad-dominant topology."
         ),
     )
+    parser.add_argument(
+        "--neutralize-pose",
+        dest="neutralize_pose",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Apply the inverse of the photo's head pose so the output mesh is "
+            "Z-forward neutral (production rig orientation). Use "
+            "--no-neutralize-pose to keep the photo's pose baked in (legacy)."
+        ),
+    )
+    parser.add_argument(
+        "--write-normals",
+        dest="write_normals",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Write per-vertex geometric normals (vn lines, v/vt/vn face refs). "
+            "Computed from the actual mesh topology, not from photo luminance."
+        ),
+    )
+    parser.add_argument(
+        "--close-boundary",
+        dest="close_boundary",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Close the open face-mask boundary by extruding the FACE_OVAL ring "
+            "backward + capping with a fan. Required for clean Catmull-Clark "
+            "subdivision in Maya/Arnold (otherwise the open boundary collapses "
+            "inward and detaches from the interior surface)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -322,6 +666,9 @@ def main(argv: List[str] | None = None) -> int:
             args.out,
             subdivisions=args.subdivisions,
             canonical_obj=args.canonical,
+            neutralize_pose=args.neutralize_pose,
+            write_normals=args.write_normals,
+            close_boundary=args.close_boundary,
         )
     except FileNotFoundError as exc:
         log.error("Missing input: %s", exc)

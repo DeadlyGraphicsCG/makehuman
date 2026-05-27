@@ -43,14 +43,17 @@ Step C. JSON → morphed MH base OBJ.
 | `--amplify`     | float | `1.0` | Multiplier on modifier values (clamped to ±1 per modifier inside the analyzer). |
 
 ## learned_face_mesh.py
-Photo → MediaPipe-FaceMesh OBJ with UVs.
+Photo → MediaPipe-FaceMesh OBJ with UVs, true geometric normals, optional pose-neutralization and boundary closure.
 
 | Flag | Type | Default | Purpose |
 |------|------|---------|---------|
 | `--image` | Path | `examples/winona_ref.png` | Source portrait. |
-| `--out`   | Path | `outputs/data/subject_face_mesh.obj` | Output OBJ. Vertex idx == UV idx. |
-| `--subdivisions` | int | `0` | Midpoint-subdivision passes. |
+| `--out`   | Path | `outputs/data/subject_face_mesh.obj` | Output OBJ. Vertex idx == UV idx == normal idx. |
+| `--subdivisions` | int | `0` | Midpoint-subdivision passes (triangle path only). |
 | `--canonical` | Path | `canonical_face_model.obj` | Canonical topology OBJ. Use `canonical_face_model_v002.obj` for the local quad-dominant experiment. |
+| `--neutralize-pose` / `--no-neutralize-pose` | flag | on | Undo the photo's yaw + roll via `cv2.solvePnP` so the mesh is Z-forward neutral (production rig orientation). Pitch is **intentionally left alone** because PnP without real camera intrinsics overshoots pitch -- supply real intrinsics to safely include it. |
+| `--write-normals` / `--no-write-normals` | flag | on | Compute true per-vertex geometric normals from the actual mesh topology and emit `vn` lines + `v/vt/vn` face refs. |
+| `--close-boundary` / `--no-close-boundary` | flag | on | Close the open face-mask boundary by extruding the `FACEMESH_FACE_OVAL` ring backward + capping with a triangle fan. **Required** for clean Catmull-Clark subdivision in Maya/Arnold -- open meshes collapse inward with each CC level. With closure: 468 v / 508 f → 505 v / 580 f. |
 
 When using a quad-dominant canonical topology, keep `--subdivisions 0` so the
 output OBJ preserves quads for Maya/Arnold Catmull-Clark subdivision.
@@ -145,6 +148,68 @@ If `mayapy` is not visible in a freshly opened terminal, use the full Maya
 
 ```powershell
 & "C:\Program Files\Autodesk\Maya2027\bin\mayapy.exe" dg_face_pipeline\build_maya_arnold_scene.py --subject winona
+```
+
+## segment_face_regions.py
+Post-processor that splits a learned-mesh OBJ into lip / eye / brow / skin
+groups using MediaPipe's landmark sets. Writes a parallel `_seg.obj` +
+`_seg.mtl` with four materials so downstream Maya / Blender / UE can bind
+distinct shaders per region.
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `--subject` | str | *(one of --subject or --in-obj is required)* | Character slug; resolves OBJ path under `outputs/characters/<slug>/data/`. |
+| `--in-obj` | Path | *(see --subject)* | Source face-mesh OBJ (overrides --subject discovery). |
+| `--out-obj` | Path | `<in_stem>_seg.obj` next to input | Where to write the segmented OBJ. |
+| `--in-place` | flag | off | Overwrite the input OBJ + its MTL. Use with care. |
+
+Typical region face counts on a v002 mesh: `skin=468, lips=16, eye=16, brow=8` (sum 508 matches the v002 face count exactly). Vertex / UV / normal counts are unchanged from input.
+
+```powershell
+python dg_face_pipeline\segment_face_regions.py --subject winona_v002
+```
+
+## extract_depth_normal.py
+Monocular depth + Sobel-gradient normal extraction via **Depth Anything v2**
+(Apache-2.0, Hugging Face). Writes raw depth (`.npy`), viewable depth PNG,
+tangent-space normal map PNG, and per-vertex depth sampled at each FaceMesh
+landmark's UV -- the last is the key input for multi-source blending.
+
+First run downloads the chosen Hugging Face checkpoint to
+`%USERPROFILE%\.cache\huggingface\hub` (Small ~25 MB, Base ~98 MB, Large ~335 MB params).
+
+| Flag | Type | Default | Purpose |
+|------|------|---------|---------|
+| `--subject` | str | *(one of --subject or --photo required)* | Auto-discovers `examples/<slug>/ref.png` + `outputs/characters/<slug>/data/<slug>_face_mesh.obj` for UV sampling. |
+| `--photo` | Path | *(see --subject)* | Explicit photo path. |
+| `--obj` | Path | auto from --subject | Face-mesh OBJ for per-vertex UV depth sampling. |
+| `--out-dir` | Path | `outputs/characters/<subject>/textures/` | Output folder. |
+| `--slug` | str | from --subject | Output filename prefix. |
+| `--model-size` | str | `base` | One of `small` / `base` / `large`. Large is sharpest on facial detail but ~3x slower. |
+| `--z-scale` | float | `200.0` | Normal-map bump strength. **Lower = stronger relief**. `2.0` produces visible facial features; `0.5` is aggressive. |
+
+Outputs (per subject):
+- `<slug>_photo_depth_raw.npy` -- float depth (HxW), arbitrary scale (Depth Anything is relative, not metric)
+- `<slug>_photo_depth.png` -- 8-bit normalised depth visualisation
+- `<slug>_photo_normal.png` -- tangent-space RGB normal map (OpenGL convention)
+- `<slug>_per_vertex_depth.csv` -- `(vertex_idx, u, v, depth)` for each vert (the multi-source-blend input)
+- `<slug>_photo_depth_meta.json` -- model id, depth range, device for reproducibility
+
+```powershell
+python dg_face_pipeline\extract_depth_normal.py --subject carolyn_lilipaly_v002 --model-size base --z-scale 2.0
+```
+
+## face_pipeline.bat
+Drag-and-drop entry point. Drop any portrait image onto this `.bat` in
+Explorer; it derives a clean slug from the filename (lowercased, non-
+alphanumerics → underscores), runs the full pipeline with the v002 canonical
++ `--subdivisions 0`, and writes everything under
+`outputs/characters/<slug>/`. No arguments needed -- everything is inferred
+from the dropped file.
+
+```text
+"Carolyn Lilipaly.jpg"   -> slug "carolyn_lilipaly"
+"hugh-griffith.webp"     -> slug "hugh_griffith"
 ```
 
 ## export_mediapipe_scaffold.py
