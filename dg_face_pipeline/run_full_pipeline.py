@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\run_full_pipeline.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\run_full_pipeline.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 # Orchestrator: DG_Brain
 """

@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\export_maya_arnold_scene.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\export_maya_arnold_scene.py
 """
 Export a MediaPipe face OBJ to a Maya ASCII scene with an Arnold skin shader.
 

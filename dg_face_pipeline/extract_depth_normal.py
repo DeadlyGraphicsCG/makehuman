@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\extract_depth_normal.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\extract_depth_normal.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 """
 Photo -> depth + normal extraction via Depth Anything v2

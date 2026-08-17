@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\step_c_apply_modifiers.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\step_c_apply_modifiers.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 # Orchestrator: DG_Brain
 """
@@ -26,8 +26,8 @@ Algorithm:
 
 Run:
     python C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\step_c_apply_modifiers.py ^
-        --proportions C:\\AI\\apps\\DG_Brain\\data\\face_proportions.json ^
-        --out_obj     C:\\AI\\apps\\DG_Brain\\data\\morphed.obj
+        --proportions C:\\AI\\apps\\Core\\DG_Brain\\data\\face_proportions.json ^
+        --out_obj     C:\\AI\\apps\\Core\\DG_Brain\\data\\morphed.obj
 """
 from __future__ import annotations
 

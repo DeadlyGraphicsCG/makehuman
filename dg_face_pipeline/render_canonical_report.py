@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\render_canonical_report.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\render_canonical_report.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 """
 Render the canonical-proportion report produced by face_proportion_analyzer.py.

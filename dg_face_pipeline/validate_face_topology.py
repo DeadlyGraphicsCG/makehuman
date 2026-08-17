@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\validate_face_topology.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\validate_face_topology.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 """
 OBJ topology validator for DG face-pipeline meshes.

@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\render_face.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\render_face.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 # Orchestrator: DG_Brain
 """
@@ -17,8 +17,8 @@ top portion of the mesh (head + neck) for legible portrait framing.
 Run:
     python C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\render_face.py ^
         --baseline C:\\AI\\apps\\Makehuman\\makehuman\\data\\3dobjs\\base.obj ^
-        --morphed  C:\\AI\\apps\\DG_Brain\\data\\morphed.obj ^
-        --out      C:\\AI\\apps\\DG_Brain\\data\\renders\\winona_mesh_compare.png
+        --morphed  C:\\AI\\apps\\Core\\DG_Brain\\data\\morphed.obj ^
+        --out      C:\\AI\\apps\\Core\\DG_Brain\\data\\renders\\winona_mesh_compare.png
 """
 from __future__ import annotations
 

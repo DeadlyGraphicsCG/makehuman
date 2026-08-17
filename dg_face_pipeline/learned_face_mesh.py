@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\learned_face_mesh.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\learned_face_mesh.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 # Orchestrator: DG_Brain
 """
@@ -20,8 +20,8 @@ optimization (non-rigid ICP) when MH-topology output is needed downstream.
 
 Run:
     python C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\learned_face_mesh.py ^
-        --image C:\\AI\\apps\\DG_Brain\\assets\\refs\\winona_ref.png ^
-        --out   C:\\AI\\apps\\DG_Brain\\data\\winona_face_mesh.obj
+        --image C:\\AI\\apps\\Core\\DG_Brain\\assets\\refs\\winona_ref.png ^
+        --out   C:\\AI\\apps\\Core\\DG_Brain\\data\\winona_face_mesh.obj
 """
 from __future__ import annotations
 

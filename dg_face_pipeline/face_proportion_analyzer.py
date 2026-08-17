@@ -1,6 +1,6 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\face_proportion_analyzer.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\face_proportion_analyzer.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
-# Orchestrator: DG_Brain (inputs/outputs flow through C:\AI\apps\DG_Brain\)
+# Orchestrator: DG_Brain (inputs/outputs flow through C:\AI\apps\Core\DG_Brain\)
 """
 Photo -> MakeHuman Face Adaptor : Step A + B
 =============================================
@@ -23,8 +23,8 @@ Install (Python 3.10 or 3.11 both supported by MediaPipe 0.10.x):
 
 Run:
     python C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\face_proportion_analyzer.py ^
-        --image C:\\AI\\apps\\DG_Brain\\assets\\refs\\winona_ref.png ^
-        --out   C:\\AI\\apps\\DG_Brain\\data\\face_proportions.json
+        --image C:\\AI\\apps\\Core\\DG_Brain\\assets\\refs\\winona_ref.png ^
+        --out   C:\\AI\\apps\\Core\\DG_Brain\\data\\face_proportions.json
 """
 from __future__ import annotations
 

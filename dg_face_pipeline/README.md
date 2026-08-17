@@ -224,7 +224,7 @@ This pipeline lives **inside** a fork of MakeHuman Community
 `feat/face-proportion-pipeline` branch is the active development branch.
 
 The pipeline is **orchestrated by the DG_Brain hub**
-(`C:\AI\apps\DG_Brain\`) — that's where production artifacts and per-subject
+(`C:\AI\apps\Core\DG_Brain\`) — that's where production artifacts and per-subject
 configurations live in the wider DG production stack. This `dg_face_pipeline/`
 folder is the self-contained execution surface; DG_Brain is the conductor.
 

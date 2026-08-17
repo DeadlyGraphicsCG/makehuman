@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\segment_face_regions.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\segment_face_regions.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 """
 Face-region segmentation for MediaPipe canonical meshes

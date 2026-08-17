@@ -1,4 +1,4 @@
-# File: C:\AI\apps\Makehuman\dg_face_pipeline\render_learned_mesh.py
+# File: C:\AI\apps\3D\Makehuman\dg_face_pipeline\render_learned_mesh.py
 # Repo: makehumancommunity/makehuman  Branch: feat/face-proportion-pipeline
 # Orchestrator: DG_Brain
 """
@@ -13,9 +13,9 @@ FaceMesh -> 478-vert OBJ). Renders three panels:
 
 Run:
     python C:\\AI\\apps\\Makehuman\\dg_face_pipeline\\render_learned_mesh.py ^
-        --photo C:\\AI\\apps\\DG_Brain\\assets\\refs\\winona_ref.png ^
-        --mesh  C:\\AI\\apps\\DG_Brain\\data\\winona_face_mesh.obj ^
-        --out   C:\\AI\\apps\\DG_Brain\\data\\renders\\winona_learned_mesh.png
+        --photo C:\\AI\\apps\\Core\\DG_Brain\\assets\\refs\\winona_ref.png ^
+        --mesh  C:\\AI\\apps\\Core\\DG_Brain\\data\\winona_face_mesh.obj ^
+        --out   C:\\AI\\apps\\Core\\DG_Brain\\data\\renders\\winona_learned_mesh.png
 """
 from __future__ import annotations
 
