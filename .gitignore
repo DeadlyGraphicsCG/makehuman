@@ -23,6 +23,22 @@ __pycache__/
 #####################################
 *.obj
 *.png
+
+# DG face pipeline vendored 3rd-party assets (Apache-2.0 from google/mediapipe)
+!dg_face_pipeline/canonical_face_model.obj
+!dg_face_pipeline/canonical_face_model_v002.obj
+
+# DG face pipeline -- generated outputs stay local
+dg_face_pipeline/outputs/
+
+# ...but committed example inputs and embedded doc images survive *.png
+!dg_face_pipeline/examples/*.png
+!dg_face_pipeline/examples/**/
+!dg_face_pipeline/examples/**/*.png
+dg_face_pipeline/examples/**/.mayaSwatches/
+dg_face_pipeline/examples/**/*.tx
+!dg_face_pipeline/docs/images/*.png
+**/.mayaSwatches/
 *.thumb
 *.mhclo
 *.mhmat

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "default_root": "B:/RESOURCES/TexturingXYZ/vFace_030",
+  "default_out": "outputs/texturing_xyz/vFace_030_manifest.json",
+  "skip_dir_names": [
+    ".mayaSwatches"
+  ],
+  "skip_file_names": [
+    "Thumbs.db",
+    "ehthumbs.db",
+    ".DS_Store"
+  ],
+  "categories": {
+    "head_geometry": [
+      "01_head/geos"
+    ],
+    "head_maps": [
+      "01_head/maps"
+    ],
+    "id_masks": [
+      "01_head/maps/ID_mask"
+    ],
+    "calibration_reference_images": [
+      "02_references"
+    ],
+    "eye_geometry": [
+      "03_extra/eyes/geos"
+    ],
+    "eye_maps": [
+      "03_extra/eyes/maps"
+    ],
+    "groom_assets": [
+      "03_extra/groom"
+    ],
+    "zbrush_tools": [
+      "01_head/ztool"
+    ],
+    "mudbox_support_files": [
+      "01_head/geos/UG_VFACE_TRANSFER-files"
+    ]
+  }
+}
